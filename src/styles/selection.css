@@ -1,0 +1,220 @@
+/* Shared styles for the three selection screens (Phase 2). */
+
+.select-screen {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 24px;
+  background: radial-gradient(ellipse at center, #2b2f4a 0%, #1a1c2c 75%);
+  color: #f5f2ea;
+  font-family: "Segoe UI", system-ui, sans-serif;
+}
+
+.select-title {
+  margin: 0;
+  font-size: 40px;
+  font-weight: 800;
+  letter-spacing: 1px;
+  text-shadow: 0 3px 0 rgba(0, 0, 0, 0.35);
+}
+
+.select-subtitle {
+  margin: -16px 0 0;
+  font-size: 15px;
+  color: #b9c2d8;
+}
+
+.card-grid {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 18px;
+  max-width: 900px;
+}
+
+/* Fixed column count — used where arrow-key Up/Down navigation assumes a grid shape. */
+.card-grid.grid-1 {
+  display: grid;
+  grid-template-columns: repeat(3, 250px);
+}
+
+.card-grid.grid-2 {
+  display: grid;
+  grid-template-columns: repeat(2, 240px);
+}
+
+/* --- Cards ------------------------------------------------------------- */
+
+.card {
+  position: relative;
+  width: 200px;
+  padding: 16px 14px 14px;
+  border-radius: 12px;
+  border: 3px solid rgba(255, 255, 255, 0.14);
+  background: linear-gradient(180deg, #3a4066 0%, #2c3152 100%);
+  cursor: pointer;
+  text-align: center;
+  transition: transform 120ms ease, border-color 120ms ease, box-shadow 120ms ease;
+}
+
+.card:hover {
+  transform: translateY(-4px);
+  border-color: rgba(255, 255, 255, 0.35);
+}
+
+.card.selected {
+  border-color: #ffd23f;
+  box-shadow: 0 0 18px rgba(255, 210, 63, 0.45), inset 0 0 12px rgba(255, 210, 63, 0.12);
+}
+
+/* Visible keyboard focus ring (arrow keys move DOM focus to the selected card). */
+.card:focus-visible {
+  outline: 3px solid #ffd23f;
+  outline-offset: 2px;
+}
+
+.card-name {
+  margin: 0 0 4px;
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.card-type {
+  margin: 0 0 10px;
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 2px;
+  color: #9fb4d8;
+}
+
+/* --- Stat bars ---------------------------------------------------------- */
+
+.stat-block {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.stat-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.stat-label {
+  width: 74px;
+  font-size: 12px;
+  text-align: left;
+  color: #cdd6ea;
+}
+
+.stat-bar {
+  display: flex;
+  gap: 3px;
+  flex: 1;
+}
+
+.stat-seg {
+  height: 10px;
+  flex: 1;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.14);
+  transition: background-color 180ms ease, box-shadow 180ms ease;
+  transition-delay: calc(var(--i) * 60ms);
+}
+
+.stat-seg.filled {
+  background: #ffd23f;
+  box-shadow: 0 0 6px rgba(255, 210, 63, 0.5);
+}
+
+/* --- Vehicle modifier badges -------------------------------------------- */
+
+.badge-row {
+  display: flex;
+  justify-content: center;
+  gap: 6px;
+  margin-top: 8px;
+  min-height: 20px;
+}
+
+.badge-pos,
+.badge-neg {
+  font-size: 12px;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 999px;
+}
+
+.badge-pos {
+  background: rgba(84, 200, 110, 0.2);
+  color: #5fd67f;
+  border: 1px solid rgba(84, 200, 110, 0.5);
+}
+
+.badge-neg {
+  background: rgba(230, 90, 70, 0.2);
+  color: #ff8a6b;
+  border: 1px solid rgba(230, 90, 70, 0.5);
+}
+
+/* --- Map swatches --------------------------------------------------------- */
+
+.swatch-strip {
+  display: flex;
+  height: 26px;
+  border-radius: 6px;
+  overflow: hidden;
+  margin-top: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.swatch-strip .swatch {
+  flex: 1;
+}
+
+.map-difficulty {
+  margin-top: 8px;
+  font-size: 13px;
+  color: #9fb4d8;
+}
+
+/* --- Footer (confirm / back + hint) --------------------------------------- */
+
+.select-footer {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+}
+
+.select-btn {
+  font-size: 16px;
+  font-weight: 700;
+  padding: 10px 28px;
+  border-radius: 999px;
+  border: none;
+  cursor: pointer;
+  background: #e8542f;
+  color: #fff;
+  transition: transform 100ms ease, filter 100ms ease;
+}
+
+.select-btn:hover {
+  filter: brightness(1.12);
+  transform: translateY(-2px);
+}
+
+.select-btn.secondary {
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.select-hint {
+  font-size: 13px;
+  color: #8b96b3;
+}

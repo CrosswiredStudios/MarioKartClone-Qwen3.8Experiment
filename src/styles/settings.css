@@ -1,0 +1,87 @@
+/* Pause + Settings overlays (Phase 4, Step 10). Sits above the HUD (z-20) and canvas. */
+
+.pause-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 24px;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  font-family: "Segoe UI", system-ui, sans-serif;
+}
+
+.pause-overlay h2 {
+  margin: 0;
+  font-size: 48px;
+  letter-spacing: 2px;
+}
+
+/* Settings sub-overlay — layered above the pause menu. */
+.settings-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 31;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  background: rgba(0, 0, 0, 0.75);
+  color: #fff;
+  font-family: "Segoe UI", system-ui, sans-serif;
+}
+
+.settings-overlay h2 {
+  margin: 0;
+  font-size: 36px;
+  letter-spacing: 1px;
+}
+
+.settings-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: min(480px, 90vw);
+}
+
+.settings-label {
+  width: 96px;
+  text-align: right;
+  font-size: 16px;
+  opacity: 0.9;
+}
+
+/* Quality preset buttons — segmented control look. */
+.settings-quality-btn {
+  flex: 1;
+  padding: 8px 0;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  background: transparent;
+  color: #fff;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  border-radius: 8px;
+}
+
+.settings-quality-btn.active {
+  background: #ff5252;
+  border-color: #ff5252;
+}
+
+/* Volume sliders. */
+.settings-row input[type="range"] {
+  flex: 1;
+  accent-color: #ff5252;
+  height: 6px;
+}
+
+.settings-row input[type="checkbox"] {
+  width: 20px;
+  height: 20px;
+  accent-color: #ff5252;
+}

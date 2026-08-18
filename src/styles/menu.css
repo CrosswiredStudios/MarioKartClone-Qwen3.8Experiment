@@ -1,0 +1,49 @@
+.menu-overlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 32px;
+  background: radial-gradient(circle at 50% 40%, #2b2f4a 0%, #1a1c2c 70%);
+  color: #fff;
+  font-family: "Segoe UI", system-ui, sans-serif;
+  z-index: 10;
+}
+
+.menu-title {
+  font-size: 56px;
+  font-weight: 800;
+  letter-spacing: 2px;
+  margin: 0;
+  text-shadow: 0 4px 0 #0e0f1a, 0 8px 24px rgba(0, 0, 0, 0.6);
+}
+
+.menu-buttons {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.menu-item {
+  min-width: 240px;
+  padding: 14px 32px;
+  font-size: 20px;
+  font-weight: 600;
+  color: #fff;
+  background: #e8542f;
+  border: none;
+  border-radius: 10px;
+  cursor: pointer;
+  box-shadow: 0 4px 0 #a33317;
+}
+
+.menu-item:hover {
+  filter: brightness(1.1);
+}
+
+.menu-item:active {
+  transform: translateY(2px);
+  box-shadow: 0 2px 0 #a33317;
+}

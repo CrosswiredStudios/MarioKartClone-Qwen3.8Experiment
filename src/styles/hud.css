@@ -1,0 +1,120 @@
+/* In-race HUD overlay (Phase 4, Steps 5–9). Absolutely positioned over the canvas.
+   The root is pointer-events:none so it never blocks the game; interactive children
+   (none in Phase 4) would re-enable pointer events individually. */
+
+.hud {
+  position: fixed;
+  inset: 0;
+  z-index: 20; /* above the canvas (z-0); below interactive overlays like pause/settings/results (z-30+) */
+  pointer-events: none;
+  color: #fff;
+  font-family: "Segoe UI", system-ui, sans-serif;
+  text-shadow: 0 2px 4px rgba(0, 0, 0, 0.7);
+}
+
+/* Top-left cluster: position + lap counter (Step 5). */
+.hud-top-left {
+  position: absolute;
+  top: 16px;
+  left: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.hud-position {
+  font-size: 32px;
+  font-weight: 800;
+  letter-spacing: 1px;
+}
+
+.hud-lap {
+  font-size: 20px;
+  font-weight: 600;
+  opacity: 0.95;
+}
+
+/* Top-right cluster: current-lap timer + best lap (Step 6). */
+.hud-top-right {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+  font-variant-numeric: tabular-nums; /* stable digit widths so the timer doesn't jitter */
+}
+
+.hud-current-time {
+  font-size: 28px;
+  font-weight: 700;
+}
+
+.hud-best-time {
+  font-size: 16px;
+  font-weight: 500;
+  opacity: 0.9;
+}
+
+/* Bottom-left: item slot (Step 7). 48×48 canvas with a subtle backing plate so the
+   icon reads against any track background. */
+.hud-item-slot {
+  position: absolute;
+  bottom: 24px;
+  left: 16px;
+  width: 56px;
+  height: 56px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.35);
+  border: 2px solid rgba(255, 255, 255, 0.4);
+  border-radius: 10px;
+}
+
+.hud-item-slot canvas {
+  display: block;
+}
+
+/* Phase 5 Step 10 — brief highlight when an item is picked up or used. Re-triggered by
+   the HUD removing/re-adding the class (with a forced reflow) so it restarts each time. */
+@keyframes hud-item-slot-flash {
+  0% {
+    box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.9), 0 0 18px 6px rgba(255, 230, 90, 0.8);
+    transform: scale(1.12);
+  }
+  100% {
+    box-shadow: 0 0 0 2px rgba(255, 255, 255, 0), 0 0 0 0 rgba(255, 230, 90, 0);
+    transform: scale(1);
+  }
+}
+
+.hud-item-slot-flash {
+  animation: hud-item-slot-flash 0.4s ease-out;
+}
+
+/* Bottom-right: SVG speedometer + numeric readout (Step 8). */
+.hud-bottom-right {
+  position: absolute;
+  bottom: 24px;
+  right: 16px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.hud-speed-value {
+  font-size: 20px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums; /* stable digit widths so the readout doesn't jitter */
+}
+
+/* Center-top: minimap (Step 9). The canvas paints its own backing plate. */
+.hud-minimap {
+  position: absolute;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  border-radius: 12px;
+}

@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Turbo Turtle Rally</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        background: #1a1c2c;
+        font-family: "Segoe UI", system-ui, sans-serif;
+      }
+      #game-canvas {
+        width: 100%;
+        height: 100%;
+        display: block;
+        touch-action: none;
+      }
+      #webgl2-error {
+        position: fixed;
+        inset: 0;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        flex-direction: column;
+        gap: 12px;
+        color: #fff;
+        background: #1a1c2c;
+        text-align: center;
+        padding: 24px;
+      }
+      #webgl2-error h1 {
+        font-size: 28px;
+        margin: 0;
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="game-canvas"></canvas>
+    <div id="webgl2-error" role="alert">
+      <h1>Turbo Turtle Rally needs WebGL2</h1>
+      <p>Your browser or GPU does not support WebGL2, which this game requires.</p>
+      <p>Please try a recent version of Chrome, Edge, Firefox, or Safari on supported hardware.</p>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
