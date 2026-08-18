@@ -11,11 +11,8 @@
  * pure modules (TrackSpline, KartPhysics, DriftController, LapTracker).
  */
 
-import type { Camera } from "@babylonjs/core";
-import {
-  Scene,
-  Vector3,
-} from "@babylonjs/core";
+import type { Camera, Scene } from "@babylonjs/core";
+import { Vector3 } from "@babylonjs/core";
 import type { RaceConfig } from "../core/RaceConfig.js";
 import type { GameContext, IGameScreen, IDrivableScreen, DriveSnapshot } from "../core/GameStateMachine.js";
 import { CHARACTER_ROSTER } from "../data/characters.js";
@@ -127,7 +124,7 @@ export class FreeDriveScene implements IGameScreen, IDrivableScreen {
       });
       const r = new KartRenderer(scene, others[i].color, `ai-kart-${i}`);
       // Park them on the grid (static — no per-frame update this phase).
-      r.update(aiState.state, { throttle: 0, steer: 0, drifting: false, useItem: false }, 0);
+      r.update(aiState.state, { throttle: 0, steer: 0, drifting: false, useItem: false, itemHeld: false }, 0);
       this.aiRenderers.push(r);
     }
 
@@ -185,7 +182,7 @@ export class FreeDriveScene implements IGameScreen, IDrivableScreen {
     const player = this.player;
     if (!player || !this.chaseCam) return;
     const s = player.state;
-    const input = this.lastInput ?? { throttle: 0, steer: 0, drifting: false, useItem: false };
+    const input = this.lastInput ?? { throttle: 0, steer: 0, drifting: false, useItem: false, itemHeld: false };
 
     // Drive the player kart visual from pure state (+ cosmetic steer/pitch + slope tilt).
     const terrain = this.track?.field;

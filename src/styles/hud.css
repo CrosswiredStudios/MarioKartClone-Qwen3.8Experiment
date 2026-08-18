@@ -57,14 +57,14 @@
   opacity: 0.9;
 }
 
-/* Bottom-left: item slot (Step 7). 48×48 canvas with a subtle backing plate so the
+/* Bottom-left: item slot (Step 7). 64×64 canvas with a subtle backing plate so the
    icon reads against any track background. */
 .hud-item-slot {
   position: absolute;
   bottom: 24px;
   left: 16px;
-  width: 56px;
-  height: 56px;
+  width: 72px;
+  height: 72px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -92,6 +92,25 @@
 
 .hud-item-slot-flash {
   animation: hud-item-slot-flash 0.4s ease-out;
+}
+
+/* Hold-to-charge (Phase 5.1): while the player holds the item button with a
+   chargeable item (green/red shell, banana), the slot pulses to show the item
+   is "loaded" on the kart's rear and will fire on release. */
+@keyframes hud-item-slot-charging {
+  0%,
+  100% {
+    box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.5), 0 0 10px 2px rgba(255, 230, 90, 0.5);
+    transform: scale(1);
+  }
+  50% {
+    box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.9), 0 0 20px 6px rgba(255, 230, 90, 0.9);
+    transform: scale(1.06);
+  }
+}
+
+.hud-item-slot-charging {
+  animation: hud-item-slot-charging 0.6s ease-in-out infinite;
 }
 
 /* Bottom-right: SVG speedometer + numeric readout (Step 8). */

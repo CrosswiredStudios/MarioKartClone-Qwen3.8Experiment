@@ -20,6 +20,15 @@
   letter-spacing: 2px;
 }
 
+/* Phase 7 — live finish-out subtitle under the "Finish!" title. */
+.results-subtitle {
+  margin: -16px 0 0;
+  max-width: min(520px, 90vw);
+  text-align: center;
+  font-size: 16px;
+  opacity: 0.8;
+}
+
 /* ── Standings table ─────────────────────────────────────────────── */
 .results-table {
   display: flex;

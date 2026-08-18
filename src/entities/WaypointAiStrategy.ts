@@ -53,7 +53,7 @@ export class WaypointAiStrategy implements IAiStrategy {
     const absErr = Math.abs(err);
     const throttle = absErr <= FULL_THROTTLE_BAND ? 1 : Math.max(THROTTLE_FLOOR, 1 - (absErr - FULL_THROTTLE_BAND));
 
-    return Object.freeze({ throttle, steer, drifting: false, useItem: false });
+    return Object.freeze({ throttle, steer, drifting: false, useItem: false, itemHeld: false });
   }
 }
 

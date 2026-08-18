@@ -20,7 +20,7 @@ import type { IInputSource } from "../input/IInputSource.js";
 import type { TrackDefinition } from "../data/tracks/shared.js";
 import type { TrackSpline } from "../tracks/TrackSpline.js";
 import { createKart, type KartEntity } from "../entities/KartEntity.js";
-import { stepKart, type DriveInput, type SurfaceKind } from "../entities/KartPhysics.js";
+import { stepKart, type DriveInput, type ItemId, type SurfaceKind } from "../entities/KartPhysics.js";
 import { makeHeightField, type HeightField } from "../tracks/TrackElevation.js";
 import { updateDrift } from "../entities/DriftController.js";
 import { onCheckpoint } from "../tracks/LapTracker.js";
@@ -61,6 +61,16 @@ const GRID_SLOTS: ReadonlyArray<readonly [number, number]> = [
   [-2.5, -9],
   [2.5, -13],
 ];
+
+/**
+ * Items the player can hold-to-charge (green/red shell, banana): the item "loads"
+ * on the kart's rear while the button is held and fires on release. The blue shell
+ * is NOT chargeable — it targets the leader from anywhere, so there's no aiming
+ * value in holding it; it fires on the press edge like the other instant items.
+ */
+function isChargeableItem(item: ItemId): boolean {
+  return item === "greenShell" || item === "redShell" || item === "banana";
+}
 
 export interface AiRacerDef {
   readonly characterId: string;
@@ -112,7 +122,7 @@ export class RaceController {
 
   // ── Phase 5 item state (all mutated only inside update) ────────────────────────
   /** Live shells in the world. Stepped each frame in spawn order (determinism). */
-  private readonly shells: ShellState[] = [];
+  private readonly shellStates: ShellState[] = [];
   /** Dropped bananas: { pos, expiresAt }. Picked up on proximity; expire after 30 s. */
   private readonly bananas: Array<{ x: number; z: number; expiresAt: number }> = [];
   /** Item box spawner (one box per cluster anchor). */
@@ -142,6 +152,18 @@ export class RaceController {
   /** The player's per-lap times in ms (HUD best-lap + Results screen). */
   private readonly playerLaps: number[] = [];
   private finalStandingsResult: FinalStanding[] | null = null;
+
+  // ── Phase 7 finish-out state ────────────────────────────────────────────────
+  /** True once the player crossed the line on the last lap (spectator mode armed). */
+  private playerFinished = false;
+  /**
+   * Waypoint driver for the player kart after they finish. Created lazily so a
+   * render-mode race (which has no headless `playerAi`) gets one only when needed.
+   * Plain strategy, NO RNG — determinism is preserved.
+   */
+  private spectatorAi: WaypointAiStrategy | null = null;
+  /** One-shot guard for the perfect-start boost award. */
+  private startBoostAwarded = false;
 
   /** Pure heightfield — single source of truth for kart Y + the slope model. */
   readonly terrain: HeightField;
@@ -224,6 +246,11 @@ export class RaceController {
     return this._phase;
   }
 
+  /** Phase 7 (finish-out): true once the player has crossed the line on the last lap. */
+  get isPlayerFinished(): boolean {
+    return this.playerFinished;
+  }
+
   /** Total laps for the current track (HUD "LAP n/total", Results). */
   get totalLaps(): number {
     return this.track.laps;
@@ -283,9 +310,29 @@ export class RaceController {
     return this.itemSpawner.boxes();
   }
 
+  /** Live shells in the world (render layer mirrors positions; logic owns state). */
+  shells(): ReadonlyArray<ShellState> {
+    return this.shellStates;
+  }
+
+  /**
+   * Debug hook (e2e / manual playtest): force the player's held item. main.ts only
+   * exposes this when debugAllowed. Clears any in-flight charge so the new item
+   * starts uncharged.
+   */
+  debugSetPlayerItem(item: ItemId): void {
+    this.player.state.item = item;
+    this.player.state.charging = null;
+  }
+
   /** Final standings with total times (null = DNF). Populated once the race finishes. */
   finalStandings(): FinalStanding[] | null {
     return this.finalStandingsResult;
+  }
+
+  /** Phase 7 (finish-out): the kart's total time in ms if it has finished, else null. */
+  finishTimeMs(id: string): number | null {
+    return this.finishedTotalMs.get(id) ?? null;
   }
 
   /**
@@ -297,6 +344,17 @@ export class RaceController {
     if (!this.aiDriveStrategy) {
       this.aiDriveStrategy = new WaypointAiStrategy(this.splineRef);
     }
+  }
+
+  /**
+   * Phase 7 (finish-out): the player clicked Skip on the live results overlay.
+   * Immediately finalizes the race — karts that haven't crossed the line become DNFs
+   * (`totalMs: null`) and `race:finished` fires right away, jumping to the podium.
+   * No-op unless we're mid-finish-out (racing phase AND player already finished).
+   */
+  skipFinishOut(): void {
+    if (this._phase !== "racing" || !this.playerFinished) return;
+    this.finalizeStandings();
   }
 
   // ── countdown phase ───────────────────────────────────────────────────
@@ -323,11 +381,35 @@ export class RaceController {
 
     // (1)+(2) Inputs: player then each AI.
     const inputs = new Map<string, DriveInput>();
-    // Step 12: when aiDriveStrategy is active it takes priority over keyboard input.
-    const playerInput = this.aiDriveStrategy
-      ? this.aiDriveStrategy.decide(this.player, view, dt)
-      : (this.playerController ? this.playerController.read() : this.playerAi!.decide(this.player, view, dt));
-    inputs.set("player", playerInput);
+    // Phase 7 (finish-out): once the player has finished they are driven by a plain
+    // waypoint strategy so the field keeps racing while the spectator view plays out.
+    if (this.playerFinished) {
+      this.spectatorAi ??= new WaypointAiStrategy(this.splineRef);
+      inputs.set("player", this.spectatorAi.decide(this.player, view, dt));
+    } else {
+      // Step 12: when aiDriveStrategy is active it takes priority over keyboard input.
+      const playerInput = this.aiDriveStrategy
+        ? this.aiDriveStrategy.decide(this.player, view, dt)
+        : (this.playerController ? this.playerController.read() : this.playerAi!.decide(this.player, view, dt));
+      inputs.set("player", playerInput);
+    }
+
+    // Phase 7 — perfect start: gas pressed within the window after GO grants a one-shot
+    // boost. Checked on the input already computed for THIS step (held-key reads are
+    // level-triggered, so holding W through GO works). Awarded before physics so the
+    // very first racing step already runs at boost speed.
+    if (!this.startBoostAwarded && this.simTime - this.raceStartTime < TUNING.race.perfectStartWindowSec) {
+      const pInput = inputs.get("player")!;
+      if (pInput.throttle > 0) {
+        this.startBoostAwarded = true;
+        this.player.state.statusEffects.push({
+          kind: "boost",
+          speed: TUNING.race.startBoostSpeed,
+          remaining: TUNING.race.startBoostDurationSec,
+        });
+        this.bus.emit("kart:boosted", { kartId: "player", tier: "start" });
+      }
+    }
     for (const k of this.racers) {
       if (k.isPlayer) continue;
       inputs.set(k.id, this.aiStrategies.get(k.id)!.decide(k, view, dt));
@@ -439,6 +521,13 @@ export class RaceController {
         if (kart.isPlayer && this.aiGraceDeadline === null) {
           this.aiGraceDeadline = this.simTime + TUNING.race.aiFinishTimeoutSec;
         }
+        // Phase 7 (finish-out): the race does NOT end here — it keeps simulating until
+        // every kart finishes or the grace deadline passes. This event routes Racing →
+        // Results (live overlay) and switches the camera to the wide spectator view.
+        if (kart.isPlayer && !this.playerFinished) {
+          this.playerFinished = true;
+          this.bus.emit("race:playerFinished", {});
+        }
       }
     }
     return state;
@@ -449,7 +538,15 @@ export class RaceController {
     const allFinished = this.finishedTotalMs.size === this.racers.length;
     const deadlinePassed = this.aiGraceDeadline !== null && this.simTime >= this.aiGraceDeadline;
     if (!allFinished && !deadlinePassed) return;
+    this.finalizeStandings();
+  }
 
+  /**
+   * Phase 7 (finish-out): build the final standings and emit `race:finished`.
+   * Called by {@link checkFinish} (natural end) or {@link skipFinishOut} (player
+   * skipped the spectator view). Unfinished karts are DNFs with `totalMs: null`.
+   */
+  private finalizeStandings(): void {
     // Finishers by total time asc first, then DNF karts by (lap desc, cp desc, t desc), id asc.
     const finishers = this.racers.filter((k) => this.finishedTotalMs.has(k.id));
     const dnfs = this.racers.filter((k) => !this.finishedTotalMs.has(k.id));
@@ -492,44 +589,49 @@ export class RaceController {
     const it = TUNING.items;
     const standings = this.standingsSnapshot; // rank 1 first (≤1 s stale — fine for targeting)
 
-    // (a) Use items. Player fires on the keyboard edge; AI auto-fires while holding.
+    // (a) Use items.
+    //   - Chargeable items (green/red shell, banana): the PLAYER holds the item
+    //     button to "load" the item on the kart's rear (state.charging); it fires
+    //     on release. Blue shell + the rest fire on the press edge.
+    //   - AI karts always fire immediately (no charge) — keeps headless
+    //     determinism and AI behavior unchanged.
     for (const k of this.racers) {
-      if (k.state.item === null) continue;
+      if (k.state.item === null) {
+        k.state.charging = null; // no item → clear any stale charge
+        continue;
+      }
+      const item = k.state.item;
       const input = inputs.get(k.id)!;
+
+      if (k.isPlayer && isChargeableItem(item)) {
+        if (input.itemHeld) {
+          k.state.charging = item; // start or continue charging
+        } else if (k.state.charging === item) {
+          this.fireItem(k, item); // release → launch
+          k.state.charging = null;
+        }
+        continue;
+      }
+
+      // Non-chargeable (player, press edge) or AI (immediate).
       const wantsUse = k.isPlayer ? input.useItem : true; // AI: use immediately when holding
       if (!wantsUse) continue;
-
-      const item = k.state.item;
-      const ctx: RaceContext = {
-        owner: k,
-        allKarts: this.racersSortedByStandings(),
-        spawnProjectile: (p) => {
-          if ("kind" in p) this.shells.push(makeShell(p, this.simTime)); // BulletBillInit → no world object
-        },
-        placeBanana: (pos) => this.bananas.push({ x: pos.x, z: pos.z, expiresAt: this.simTime + it.bananaLifetimeSec }),
-      };
-
-      const results = getItemEffect(item).apply(ctx);
-      k.state.item = null; // consumed on use
-      this.bus.emit("item:used", { kartId: k.id, item });
-      for (const r of results) {
-        if (r.kind === "boost") this.bus.emit("kart:boosted", { kartId: k.id, tier: "shroom" });
-      }
+      this.fireItem(k, item);
     }
 
     // (b) Step shells in spawn order (deterministic). Apply hit outcomes per result.
     const finishedIds = new Set<string>();
     for (const k of this.racers) if (this.runtime.get(k.id)!.finished) finishedIds.add(k.id);
 
-    if (this.shells.length > 0) {
+    if (this.shellStates.length > 0) {
       const survivors: ShellState[] = [];
-      for (const shell of this.shells) {
+      for (const shell of this.shellStates) {
         const res = stepShell(shell, this.racers, this.splineRef, dt, { simTime: this.simTime, finishedIds, standings });
         if (res.hit !== undefined) this.applyShellHit(res.hit, shell.ownerId, shell.kind);
         if (!res.removed) survivors.push(res.shell);
       }
-      this.shells.length = 0;
-      this.shells.push(...survivors);
+      this.shellStates.length = 0;
+      this.shellStates.push(...survivors);
     }
 
     // (c) Bullet-bill rams: a bullet within hit radius knocks the victim back.
@@ -573,6 +675,30 @@ export class RaceController {
 
     // (e) Item box spawner — respawn timers + rank-based pickup rolls.
     this.itemSpawner.update(this.racers, standings, this.simTime, dt);
+  }
+
+  /**
+   * Consume the kart's current item: apply its effect, clear the slot, emit
+   * item:used (+ kart:boosted for shroom). Shared by the press-edge path, the
+   * charge-release path, and the AI immediate path.
+   */
+  private fireItem(k: KartEntity, item: ItemId): void {
+    const it = TUNING.items;
+    const ctx: RaceContext = {
+      owner: k,
+      allKarts: this.racersSortedByStandings(),
+      spawnProjectile: (p) => {
+        if ("kind" in p) this.shellStates.push(makeShell(p, this.simTime)); // BulletBillInit → no world object
+      },
+      placeBanana: (pos) => this.bananas.push({ x: pos.x, z: pos.z, expiresAt: this.simTime + it.bananaLifetimeSec }),
+    };
+
+    const results = getItemEffect(item).apply(ctx);
+    k.state.item = null; // consumed on use
+    this.bus.emit("item:used", { kartId: k.id, item });
+    for (const r of results) {
+      if (r.kind === "boost") this.bus.emit("kart:boosted", { kartId: k.id, tier: "shroom" });
+    }
   }
 
   /** Shell struck a kart: starred target deflects (shooter takes the hit), else victim is hit. */

@@ -54,6 +54,11 @@ test.describe("Phase 4 full race (AI-driven)", () => {
       { timeout: 15_000 },
     );
 
+    // Phase 7 regression guard: the traffic-light overlay must be REMOVED once the
+    // race starts (it's a transparent DOM layer over the live world — if it lingers,
+    // the player sees "GO!" forever).
+    await expect(page.getByTestId("countdown-stub")).toHaveCount(0);
+
     // ── Verify HUD is visible during race ──────────────────────────────────
     const hudVisible = await page.evaluate(() => !!document.querySelector(".hud"));
     expect(hudVisible, `HUD missing. errors=${JSON.stringify(errors)}`).toBe(true);
@@ -109,16 +114,32 @@ test.describe("Phase 4 full race (AI-driven)", () => {
     );
     expect(sawElevation, `Player kart never left its spawn elevation (terrain not applied). errors=${JSON.stringify(errors)}`).toBeTruthy();
 
-    // ── Poll until race finishes → Results screen ──────────────────────────
+    // ── Player crosses the line → Results (Phase 7 live finish-out) ────────
     await page.waitForFunction(
       () => window.__game.state === "Results",
       null,
       { timeout: RACE_TIMEOUT_MS },
     );
-
-    // ── Verify Results screen (Step 11) ────────────────────────────────────
     const resultsScreen = page.getByTestId("screen-results");
     await expect(resultsScreen).toBeVisible();
+
+    // Phase 7: while the field is still racing, a live table + Skip button show.
+    // Click Skip (if present) to fast-forward to the final standings and keep runtime
+    // short. If the field already finished naturally there's no Skip — that's fine too.
+    const skip = page.getByTestId("results-skip");
+    if (await skip.isVisible().catch(() => false)) {
+      await expect(page.locator(".results-overlay h2")).toHaveText("Finish!");
+      await skip.click();
+    }
+
+    // Wait for the race to fully finalize (all karts done or Skip) → final table.
+    await page.waitForFunction(
+      () => window.__game.racePhase() === "finished",
+      null,
+      { timeout: RACE_TIMEOUT_MS },
+    );
+
+    // ── Verify Results screen (Step 11) — final layout ─────────────────────
     await expect(page.locator(".results-overlay h2")).toHaveText("Race Complete");
 
     // Results table: exactly 4 rows (P1–P4)
@@ -219,9 +240,11 @@ test.describe("Phase 4 full race (AI-driven)", () => {
     );
     expect(sawElevation, `Player kart never left its spawn elevation on Lagoon. errors=${JSON.stringify(errors)}`).toBeTruthy();
 
-    // ── Poll until race finishes → Results screen ───────────────────────────
+    // ── Wait for the FULL field to finish → final Results. We deliberately do NOT
+    //     click Skip here: this test asserts no DNFs, so every kart must cross the line
+    //     naturally and get a real time (Phase 7 live finish-out resolves on its own).
     await page.waitForFunction(
-      () => window.__game.state === "Results",
+      () => window.__game.racePhase() === "finished",
       null,
       { timeout: RACE_TIMEOUT_MS },
     );

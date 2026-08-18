@@ -7,6 +7,12 @@ export interface IInputSource {
   axis(name: "throttle" | "steer"): number;
   /** Held state (item/pause also true on the press frame). */
   button(name: "drift" | "item" | "pause"): boolean;
+  /**
+   * Level-triggered held state: true while the key is physically down, regardless
+   * of the edge flag. Used for the hold-to-charge item mechanic (the edge flag
+   * alone can't distinguish "holding" from "just pressed").
+   */
+  buttonHeld(name: "item"): boolean;
   /** Edge-triggered, cleared each logic step by {@link endLogicStep}. */
   justPressed(name: "item" | "pause"): boolean;
 }

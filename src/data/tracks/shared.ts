@@ -7,8 +7,10 @@ import type { Vec2 } from "../../core/Vec.js";
 export interface TrackTheme {
   readonly groundColor: string; // hex, e.g. "#3fa34d"
   readonly accentColor: string; // hex — props/lava accents
-  readonly skyTop: string; // hex gradient top
-  readonly skyBottom: string; // hex gradient bottom
+  readonly skyTop: string; // hex gradient top (fog/clear + MapSelect swatch)
+  readonly skyBottom: string; // hex gradient bottom (fog/clear + MapSelect swatch)
+  /** CubeTexture base path under public/ — faces are `{skybox}_{px,nx,py,ny,pz,nz}.jpg`. */
+  readonly skybox: string;
   readonly fogColor: string; // hex
   readonly fogDensity: number; // per-meter exponential density
   readonly sunIntensity: number; // directional light intensity
@@ -109,6 +111,10 @@ export function validateTrackDefinition(track: TrackDefinition): void {
     if (!isFiniteNumber(theme[key]) || theme[key] < 0) {
       throw new Error(`track ${track.id}: theme.${key} must be a non-negative finite number`);
     }
+  }
+  // CubeTexture base path: relative, no extension — face suffixes are appended by the loader.
+  if (!/^textures\/[a-z0-9_-]+$/.test(theme.skybox)) {
+    throw new Error(`track ${track.id}: theme.skybox must look like "textures/<name>" (no extension): ${theme.skybox}`);
   }
 
   for (const cluster of track.itemBoxClusters) {

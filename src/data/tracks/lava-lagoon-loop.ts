@@ -88,6 +88,7 @@ export const LAGOON_TRACK: TrackDefinition = {
     accentColor: "#ff5a1f", // dark rock + orange-red lava accents
     skyTop: "#2a1440",
     skyBottom: "#ff7a3c", // deep purple -> orange
+    skybox: "textures/skybox_lagoon", // Space starfield cubemap (Babylon playground library)
     fogColor: "#3a1e2e",
     fogDensity: 0.006, // denser than meadows
     sunIntensity: 0.55,

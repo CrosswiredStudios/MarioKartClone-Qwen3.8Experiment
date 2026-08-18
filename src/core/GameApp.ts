@@ -19,6 +19,7 @@ import { LAGOON_TRACK, MEADOWS_TRACK } from "../data/tracks/index.js";
 import { TrackSpline } from "../tracks/TrackSpline.js";
 import { TUNING } from "../data/tuning.js";
 import { RaceController } from "../race/RaceController.js";
+import type { ItemId } from "../entities/KartPhysics.js";
 import { createRng, raceSeed } from "./Rng.js";
 import { EventBus, type GameEvents } from "./EventBus.js";
 import {
@@ -84,23 +85,60 @@ class FreeDriveCountdown implements IGameScreen {
 }
 
 /**
- * Phase 4 race countdown interstitial (06-phase-4-race-loop-and-ai.md, Step 3).
+ * Phase 7 — thin "Countdown" screen that delegates to the shared RaceScene so the
+ * in-scene countdown renders over the LIVE track world (all four cars visible on the
+ * grid, wide framing easing into chase). The real scene is registered under "Racing";
+ * this adapter keeps it entered across the Countdown → Racing transition without
+ * rebuilding the world (RaceScene.enter() is idempotent).
+ */
+class RaceCountdownAdapter implements IGameScreen {
+  readonly id = "Countdown" as const;
+
+  /** The scene is built at Countdown enter (post-boot, needs the controller) — hence a getter. */
+  constructor(private readonly getScene: () => RaceScene | null) {}
+
+  enter(ctx: GameContext): void {
+    this.getScene()?.enter(ctx);
+  }
+
+  exit(): void {
+    // No-op — the world stays alive for the Racing re-entry (keepWorldOnExit pattern).
+  }
+
+  /** Keep the race world across Countdown → Racing so RaceScene isn't torn down + rebuilt. */
+  keepWorldOnExit(to: string): boolean {
+    return to === "Racing";
+  }
+
+  update(dt: number): void {
+    this.getScene()?.update(dt);
+  }
+
+  onFrame(dt: number): void {
+    this.getScene()?.onFrame(dt);
+  }
+}
+
+/**
+ * Phase 7 race countdown overlay (replaces the old full-screen interstitial).
  *
  * A traffic-light start sequence driven by the RaceController's `race:countdownTick`
- * events: as the count goes 3 → 2 → 1 the red, amber and green lamps light up in
- * turn (with a big matching number), then on `race:start` all three go bright green
- * and a "GO!" flashes before handing off to Racing. The countdown timing itself
- * lives in the RaceController (single source of truth); this screen is purely
- * presentational. Beeps/horn come from SfxPlayer (no-ops until audio unlocks).
+ * events, rendered as a DOM overlay ON TOP of the live race scene (the cars are
+ * visible on the grid behind it). As the count goes 3 → 2 → 1 the red, amber and
+ * green lamps light up in turn (with a big matching number), then on `race:start`
+ * all three go bright green and a "GO!" flashes before handing off to Racing.
+ * The countdown timing itself lives in the RaceController (single source of truth);
+ * this overlay is purely presentational. Owned by GameApp like the HUD — NOT a
+ * state-machine screen, because the active screen during Countdown is now the
+ * RaceCountdownAdapter over the live world.
  */
-class RaceCountdownScreen implements IGameScreen {
-  readonly id = "Countdown" as const;
+class CountdownOverlay {
   private el: HTMLDivElement | null = null;
   private numEl: HTMLDivElement | null = null;
   private lights: Record<"red" | "amber" | "green", HTMLElement> | null = null;
-  /** Delayed hand-off to Racing after the GO flash — cleared on exit. */
+  /** Delayed hand-off to Racing after the GO flash — cleared on hide. */
   private goTimerId: number | null = null;
-  /** Unsubscribers for the race:* listeners added in enter() — cleared on exit. */
+  /** Unsubscribers for the race:* listeners added in show() — cleared on hide. */
   private unsubs: Array<() => void> = [];
 
   constructor(
@@ -108,7 +146,8 @@ class RaceCountdownScreen implements IGameScreen {
     private readonly sfx: SfxPlayer,
   ) {}
 
-  enter(_ctx: GameContext): void {
+  /** Build the overlay DOM + subscribe to countdown events (idempotent per show). */
+  show(): void {
     // Subscribe per-enter and unsubscribe on exit so re-entries don't stack listeners.
     this.unsubs.push(
       this.ctx.eventBus.on("race:countdownTick", ({ remaining }) => {
@@ -183,7 +222,8 @@ class RaceCountdownScreen implements IGameScreen {
     this.el = div;
   }
 
-  exit(): void {
+  /** Tear down the overlay DOM + listeners (idempotent). */
+  hide(): void {
     for (const off of this.unsubs) off();
     this.unsubs = [];
     if (this.goTimerId !== null) {
@@ -221,8 +261,12 @@ export class GameApp {
    * transition, where keepWorldOnExit skips the normal exit() teardown. Null otherwise.
    */
   private raceScene: RaceScene | null = null;
+  /** Phase 7 — live results screen ref (race mode only) so update() can drive tickLive(). */
+  private resultsScreen: ResultsScreen | null = null;
   /** In-race HUD overlay (visible during Racing + Paused). Owned here, not a screen. */
   private readonly hud: Hud;
+  /** Phase 7 — traffic-light countdown overlay shown over the live race scene. */
+  private readonly countdownOverlay: CountdownOverlay;
   /** Persisted player settings (Phase 4 Step 10). */
   private readonly settingsStore = new SettingsStore();
   /**
@@ -274,14 +318,37 @@ export class GameApp {
     this.race?.enableAiDrive();
   }
 
+  /**
+   * Phase 5.1 debug hook — force the player's held item (e2e / manual playtest).
+   * main.ts only exposes this when debugAllowed. No-op when no race is active.
+   */
+  debugSetPlayerItem(item: string): void {
+    this.race?.debugSetPlayerItem(item as ItemId);
+  }
+
+  /**
+   * Phase 5.1 — the PLAYER's live shell count for window.__game (0 when no race is
+   * active). Counts only the player's shells so the e2e charge test isn't perturbed
+   * by AI-fired shells. (The full world mirror is race.shells().)
+   */
+  shellCount(): number {
+    if (!this.race) return 0;
+    return this.race.shells().filter((s) => s.ownerId === "player").length;
+  }
+
   /** Live standings for window.__game (empty array when no race is active). */
   raceStandings(): Array<{ id: string; name: string; rank: number; lap: number; t: number }> {
     return this.race ? this.race.standings() : [];
   }
 
+  /** Phase 7 — current race phase for window.__game ("countdown" | "racing" | "finished"). */
+  racePhase(): string {
+    return this.race?.phase ?? "none";
+  }
+
   /** Per-kart summary for window.__game (empty array when no race is active). */
-  raceKartSummary(): Array<{ id: string; pos: { x: number; y: number; z: number }; speed: number; lap: number; item: unknown }> {
-    return this.race ? this.race.karts().map((k) => ({ id: k.id, pos: k.state.pos, speed: k.state.speed, lap: k.state.lap, item: k.state.item })) : [];
+  raceKartSummary(): Array<{ id: string; pos: { x: number; y: number; z: number }; speed: number; lap: number; item: unknown; charging: unknown }> {
+    return this.race ? this.race.karts().map((k) => ({ id: k.id, pos: k.state.pos, speed: k.state.speed, lap: k.state.lap, item: k.state.item, charging: k.state.charging })) : [];
   }
 
   constructor(engine: unknown, scene: unknown, freeDriveMode = false, debugAllowed = false) {
@@ -301,6 +368,7 @@ export class GameApp {
     this.machine = new GameStateMachine("MainMenu", this.eventBus, this.ctx);
     // HUD reads the live controller through a getter so it always sees the current race.
     this.hud = new Hud(() => this.race);
+    this.countdownOverlay = new CountdownOverlay(this.ctx, this.sfx);
   }
 
   /** Create screens -> register with the machine -> enter initial -> start loop. */
@@ -312,12 +380,13 @@ export class GameApp {
     this.machine.register(new VehicleSelect());
     this.machine.register(new MapSelect());
 
-    // Countdown interstitial: free-drive shows the short "FREE DRIVE" label; race mode
-    // shows the real 3-2-1-GO driven by the RaceController's countdown events.
+    // Countdown: free-drive shows the short "FREE DRIVE" label; race mode (Phase 7)
+    // delegates to the live RaceScene so the 3-2-1-GO plays OVER the track world with
+    // all four cars visible on the grid (the traffic-light overlay is DOM, owned here).
     if (this.ctx.freeDriveMode) {
       this.machine.register(new FreeDriveCountdown(this.ctx));
     } else {
-      this.machine.register(new RaceCountdownScreen(this.ctx, this.sfx));
+      this.machine.register(new RaceCountdownAdapter(() => this.raceScene));
     }
 
     // Phase 4 Step 10: real pause overlay replaces its stub (race mode only — free-drive
@@ -334,7 +403,9 @@ export class GameApp {
       );
       // Phase 4 Step 11: real results screen replaces its stub (race mode only — free-drive
       // has no race to finish). Reads final standings through a getter to the controller.
-      this.machine.register(new ResultsScreen(() => this.race));
+      const results = new ResultsScreen(() => this.race);
+      this.resultsScreen = results; // Phase 7: driven by update() during the live finish-out.
+      this.machine.register(results);
     }
 
     for (const id of GAME_SCREEN_IDS) {
@@ -356,21 +427,27 @@ export class GameApp {
         console.warn(`[GameApp] Ignoring illegal navigation to "${to}".`);
         return;
       }
-      // Lazy scene registration: build the render scene once we have a raceConfig.
+      // Lazy scene registration (free-drive only): build once we have a raceConfig. Race
+      // mode builds its scene at Countdown enter below, so the in-scene countdown renders.
       if (to === "Racing" && !this.machine.has("Racing") && this.ctx.raceConfig) {
         if (this.ctx.freeDriveMode) {
           this.machine.register(new FreeDriveScene(this.ctx, this.ctx.raceConfig));
-        } else if (this.race) {
-          // Race mode: the controller was built on Countdown enter; wrap it in a scene.
-          const rs = new RaceScene(this.ctx, this.race);
-          this.raceScene = rs; // Phase 6 (T16): held for podium driving + teardown.
-          this.machine.register(rs);
         }
       }
-      // Race mode: build the controller when we enter Countdown (MapSelect confirm has
-      // already set ctx.raceConfig). It must exist before the first countdown tick fires.
+      // Race mode: build the controller + render scene when we enter Countdown (MapSelect
+      // confirm has already set ctx.raceConfig). The scene must exist before the first
+      // countdown tick fires so the cars are visible on the grid behind the overlay.
       if (!this.ctx.freeDriveMode && to === "Countdown" && this.ctx.raceConfig) {
-        this.buildRace(this.ctx.raceConfig);
+        this.buildRace(this.ctx.raceConfig); // idempotent — also unregisters any old Racing screen
+        const rs = new RaceScene(this.ctx, this.race!);
+        this.raceScene = rs; // Phase 6 (T16): held for podium driving + teardown.
+        this.machine.register(rs);
+        this.countdownOverlay.show();
+      }
+      // Leaving Countdown (anywhere, including the GO → Racing hand-off) hides the
+      // overlay. hide() is idempotent and show() re-subscribes on the next race's enter.
+      if (!this.ctx.freeDriveMode && this.machine.currentId === "Countdown") {
+        this.countdownOverlay.hide();
       }
       // Step 12: auto-enable AI drive when the localStorage flag is set. Gated on
       // debugAllowed (dev mode or ?debug) so a plain production build never reads the
@@ -385,6 +462,8 @@ export class GameApp {
       // BEFORE teardownRace so renderPipeline.exitMap() precedes pipeline.dispose(),
       // matching the pre-podium ordering. Guarded + idempotent (no-op if already torn down).
       if (!this.ctx.freeDriveMode && this.machine.currentId === "Results" && to !== "Results") {
+        // Phase 7: the engine hum runs through the finish-out and ends here.
+        this.sfx.stopEngineLoop();
         this.raceScene?.endPodium();
         this.raceScene?.exit();
       }
@@ -401,19 +480,31 @@ export class GameApp {
       this.machine.transition(to);
     });
 
-    // Race mode: when the controller finishes the race, route to the Results screen.
-    // The transition table allows Racing → Results; the controller only emits this once.
+    // Phase 7 (finish-out): the moment the PLAYER crosses the line on the last lap, route
+    // to Results immediately — the overlay shows live rankings while the AI-driven player
+    // keeps racing and the field finishes out. The transition table allows Racing → Results.
+    this.eventBus.on("race:playerFinished", () => {
+      if (this.ctx.freeDriveMode) return;
+      if (this.machine.currentId === "Racing" && this.machine.canTransition("Results")) {
+        this.machine.transition("Results");
+      }
+    });
+
+    // Race mode: when the controller finishes the race (all karts done or grace deadline),
+    // start the podium over the live world. In Phase 7 we're usually ALREADY in Results by
+    // then (player finished first); beginPodium is idempotent and safe from either state.
     this.eventBus.on("race:finished", () => {
       if (this.ctx.freeDriveMode) return;
-      // Phase 6: the engine hum ends with the race.
-      this.sfx.stopEngineLoop();
+      const standings = this.race?.finalStandings() ?? [];
+      // Phase 6 (T16): the podium animates over the live race world; the fanfare fires
+      // mid step-up bounce, not here.
+      this.raceScene?.beginPodium(standings, () => this.music.playTheme("fanfare"));
       if (this.machine.currentId === "Racing" && this.machine.canTransition("Results")) {
-        // Phase 6 (T16): start the podium sequence BEFORE transitioning so it animates over
-        // the live race world (keepWorldOnExit skips exit() for Racing → Results). The
-        // fanfare fires mid step-up bounce, not here.
-        const standings = this.race?.finalStandings() ?? [];
-        this.raceScene?.beginPodium(standings, () => this.music.playTheme("fanfare"));
         this.machine.transition("Results");
+      } else if (this.machine.currentId === "Results") {
+        // Phase 7: we're already in Results from the live finish-out — swap the live
+        // table for the final one (drops Skip, shows DNFs + total times).
+        this.resultsScreen?.finalize();
       }
     });
 
@@ -450,6 +541,7 @@ export class GameApp {
     this.eventBus.on("kart:boosted", ({ kartId, tier }) => {
       if (!isPlayer(kartId)) return;
       if (tier === "shroom") this.sfx.shroomBoost();
+      else if (tier === "start") this.sfx.startBoost(); // Phase 7 perfect-start boost
       else this.sfx.driftWhoosh(); // mini / super drift turbo
     });
 
@@ -503,8 +595,11 @@ export class GameApp {
     // It owns all simulation math and emits race:* events; the screens are presentational.
     // Not stepped while Paused (Step 10 adds that guard explicitly — here it's implicit
     // because "Paused" is neither of the two ids).
-    if (!this.ctx.freeDriveMode && this.race && (id === "Countdown" || id === "Racing")) {
-      this.race.update(dt);
+    // Phase 7: also stepped during the finish-out — we're in Results but the field is
+    // still racing after the player crossed (phase !== "finished").
+    if (!this.ctx.freeDriveMode && this.race) {
+      const stepping = id === "Countdown" || id === "Racing" || (id === "Results" && this.race.phase !== "finished");
+      if (stepping) this.race.update(dt);
     }
     // Refresh HUD text each logic step while racing (frozen automatically when Paused,
     // because update() early-returns for that state in Step 10).
@@ -527,11 +622,17 @@ export class GameApp {
     if (screen && "onFrame" in screen) {
       (screen as unknown as { onFrame(dt: number): void }).onFrame(dt);
     }
-    // Phase 6 (T16): while in Results, drive the podium choreography over the kept-alive
-    // race world. The active screen is now ResultsScreen, so RaceScene.onFrame no longer
-    // runs — we tick the podium explicitly on this same fixed clock.
-    if (!this.ctx.freeDriveMode && id === "Results") {
-      this.raceScene?.podiumTick(dt);
+    // Phase 6 (T16) / Phase 7: while in Results, drive the kept-alive race world
+    // explicitly — RaceScene.onFrame no longer runs because the active screen is
+    // ResultsScreen. During the finish-out (field still racing) we tick the live scene
+    // frame + refresh the results table; once fully finished we run the podium.
+    if (!this.ctx.freeDriveMode && id === "Results" && this.race) {
+      if (this.race.phase !== "finished") {
+        this.raceScene?.tick(dt);
+        this.resultsScreen?.tickLive();
+      } else {
+        this.raceScene?.podiumTick(dt);
+      }
     }
     this.input.endLogicStep();
   }

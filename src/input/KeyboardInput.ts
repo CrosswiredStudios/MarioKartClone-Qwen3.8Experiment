@@ -53,6 +53,11 @@ export class KeyboardInput implements IInputSource {
     return name === "item" ? this.justItem || this.held.has("KeyE") : this.justPause || this.held.has("Escape");
   }
 
+  /** Level-triggered: true while the item key is physically down (hold-to-charge). */
+  buttonHeld(_name: "item"): boolean {
+    return this.held.has("KeyE") || this.held.has("Enter");
+  }
+
   justPressed(name: "item" | "pause"): boolean {
     // Cleared by endLogicStep(), NOT here — a step may query twice.
     return name === "item" ? this.justItem : this.justPause;

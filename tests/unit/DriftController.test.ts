@@ -6,7 +6,7 @@ import { NO_DRIFT, updateDrift, type DriftCharge } from "../../src/entities/Drif
 const DT = 1 / 60;
 
 function input(over: Partial<DriveInput> = {}): DriveInput {
-  return Object.freeze({ throttle: 0, steer: 0, drifting: false, useItem: false, ...over });
+  return Object.freeze({ throttle: 0, steer: 0, drifting: false, useItem: false, itemHeld: false, ...over });
 }
 
 /** Run n steps with a constant input from the given charge state. */

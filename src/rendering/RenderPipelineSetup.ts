@@ -3,7 +3,8 @@
  * (08-phase-6-vfx-audio-polish.md T1/T2; 01-architecture.md §10).
  *
  * Owns everything "environment" about a map scene:
- *   (a) procedural gradient skybox — inverted sphere with a 2×512 DynamicTexture,
+ *   (a) cube-texture skybox — inverted sphere painted by a per-track 6-face CubeTexture
+ *       (assets under public/textures/skybox-*, see TrackTheme.skybox),
  *   (b) per-map lighting rig — hemispheric + directional sun + accent point lights,
  *       plus a preset-dependent shadow generator on the sun,
  *   (c) EXP2 fog from the theme,
@@ -36,9 +37,9 @@
 
 import {
   Color3,
+  CubeTexture,
   DefaultRenderingPipeline,
   DirectionalLight,
-  DynamicTexture,
   HemisphericLight,
   Mesh,
   MeshBuilder,
@@ -47,6 +48,7 @@ import {
   SSAORenderingPipeline,
   ShadowGenerator,
   StandardMaterial,
+  Texture,
   Vector3,
 } from "@babylonjs/core";
 import type { TrackTheme } from "../data/tracks/shared.js";
@@ -54,8 +56,6 @@ import type { QualityManager } from "./QualityManager.js";
 
 /** Skybox sphere radius (m) — far beyond any camera travel; infiniteDistance keeps it fixed. */
 const SKYBOX_RADIUS = 2000;
-/** Gradient texture height in pixels (width is 2 — the gradient is vertical only). */
-const GRADIENT_HEIGHT = 512;
 /** Fixed sun direction shared by both maps (matches the P4/P5 inline lights). */
 const SUN_DIRECTION = new Vector3(-0.4, -1, 0.3);
 /** Accent point-light range (m) — a soft local glow, not scene-wide illumination. */
@@ -64,6 +64,7 @@ const ACCENT_LIGHT_RANGE = 40;
 export class RenderPipelineSetup {
   private skybox: ReturnType<typeof MeshBuilder.CreateSphere> | null = null;
   private skyMat: StandardMaterial | null = null;
+  private skyTex: CubeTexture | null = null;
   private hemi: HemisphericLight | null = null;
   private sun: DirectionalLight | null = null;
   private accentLights: PointLight[] = [];
@@ -162,26 +163,24 @@ export class RenderPipelineSetup {
     sphere.infiniteDistance = true; // stays centered on the camera — no parallax drift
     sphere.applyFog = false;
 
-    // 2×512 vertical gradient painted top→bottom. Canvas row 0 is the texture's V=1,
-    // which maps to the TOP of the sphere — so stop 0 must be skyTop.
-    const tex = new DynamicTexture("sky-gradient", { width: 2, height: GRADIENT_HEIGHT }, scene, false);
-    const ctx = tex.getContext();
-    const grad = ctx.createLinearGradient(0, 0, 0, GRADIENT_HEIGHT);
-    grad.addColorStop(0, theme.skyTop);
-    grad.addColorStop(1, theme.skyBottom);
-    ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, 2, GRADIENT_HEIGHT);
-    tex.update();
+    // Per-track 6-face cubemap. CubeTexture appends _px/_nx/_py/_ny/_pz/_nz.jpg to the base
+    // path, so theme.skybox is extension-less (validated in shared.ts). SKYBOX_MODE paints
+    // the faces directly on the cube instead of simulating a reflection.
+    const tex = new CubeTexture(theme.skybox, scene);
+    tex.coordinatesMode = Texture.SKYBOX_MODE;
 
     const mat = new StandardMaterial("sky-mat", scene);
-    mat.diffuseTexture = tex;
-    mat.emissiveColor = Color3.White(); // unlit — the gradient IS the color (v9: White is a factory)
+    mat.reflectionTexture = tex; // skyboxes use reflectionTexture even though it's not a reflection
+    // NO emissiveColor: with disableLighting, diffuseBase stays 0, so the final color is
+    // just reflectionColor.rgb (the cubemap). Setting emissive to white would ADD (1,1,1)
+    // on top of the sky and blow it out to gray/white.
     mat.disableLighting = true;
     mat.specularColor = new Color3(0, 0, 0);
     sphere.material = mat;
 
     this.skybox = sphere;
     this.skyMat = mat;
+    this.skyTex = tex;
   }
 
   // ── (b) Lighting rig + shadows ────────────────────────────────────────────
@@ -283,9 +282,14 @@ export class RenderPipelineSetup {
     pipeline.fxaaEnabled = preset === "low";
 
     // Image processing (color grade) on Medium/High: contrast 1.05 for the stylized
-    // cartoon look. v9 has no `saturation` accessor, so only contrast is applied.
+    // cartoon look + a soft vignette to focus the eye on the track. v9 has no
+    // `saturation` accessor, so only contrast is applied.
     if (preset !== "low") {
-      scene.imageProcessingConfiguration.contrast = 1.05;
+      const ip = scene.imageProcessingConfiguration;
+      ip.contrast = 1.05;
+      ip.vignetteEnabled = true;
+      ip.vignetteWeight = 0.35; // subtle — darkens corners, keeps the center clean
+      ip.vignetteColor.set(0, 0, 0, 1);
       pipeline.imageProcessingEnabled = true;
     } else {
       pipeline.imageProcessingEnabled = false;
@@ -349,10 +353,12 @@ export class RenderPipelineSetup {
     this.accentLights = [];
     this.sun?.dispose();
     this.hemi?.dispose();
+    this.skyTex?.dispose();
     this.skyMat?.dispose();
     this.skybox?.dispose();
     this.sun = null;
     this.hemi = null;
+    this.skyTex = null;
     this.skyMat = null;
     this.skybox = null;
   }

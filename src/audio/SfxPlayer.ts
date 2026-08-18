@@ -116,6 +116,46 @@ export class SfxPlayer {
     src.stop(t0 + dur);
   }
 
+  /**
+   * Perfect-start boost (Phase 7) — a short rising zap: sawtooth sweep up an octave
+   * under the same band-passed noise whoosh as driftWhoosh, but brighter and longer.
+   */
+  startBoost(): void {
+    const d = this.dest();
+    if (!d) return;
+    const t0 = d.ctx.currentTime;
+    const dur = 0.5;
+
+    // Rising sawtooth zap (C4 → C6).
+    const osc = d.ctx.createOscillator();
+    osc.type = "sawtooth";
+    osc.frequency.setValueAtTime(261, t0);
+    osc.frequency.exponentialRampToValueAtTime(1046, t0 + dur * 0.8);
+    const og = d.ctx.createGain();
+    og.gain.setValueAtTime(0.0001, t0);
+    og.gain.linearRampToValueAtTime(0.25, t0 + 0.06);
+    og.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    osc.connect(og).connect(d.out);
+    osc.start(t0);
+    osc.stop(t0 + dur);
+
+    // Bright noise whoosh on top (wider band than driftWhoosh).
+    const src = d.ctx.createBufferSource();
+    src.buffer = this.noise(d.ctx, dur);
+    const bp = d.ctx.createBiquadFilter();
+    bp.type = "bandpass";
+    bp.Q.value = 1.0;
+    bp.frequency.setValueAtTime(800, t0);
+    bp.frequency.exponentialRampToValueAtTime(7000, t0 + dur);
+    const ng = d.ctx.createGain();
+    ng.gain.setValueAtTime(0.0001, t0);
+    ng.gain.linearRampToValueAtTime(0.3, t0 + 0.08);
+    ng.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    src.connect(bp).connect(ng).connect(d.out);
+    src.start(t0);
+    src.stop(t0 + dur);
+  }
+
   /** Shell launch — a short punchy blip; pitch rises with shell tier. */
   shellFire(kind: ShellKind): void {
     const freq = kind === "green" ? 320 : kind === "red" ? 440 : 580;

@@ -46,18 +46,22 @@ function pad3(n: number): string {
  *
  */
 export function drawItemIcon(ctx: CanvasRenderingContext2D, itemId: ItemId | null): void {
-  const S = 48; // canvas size
+  const S = 64; // canvas size (enlarged from 48 for readability on the dark plate)
   ctx.clearRect(0, 0, S, S);
 
   if (itemId === null) {
     ctx.fillStyle = "rgba(255, 255, 255, 0.9)";
-    ctx.font = "bold 28px 'Segoe UI', system-ui, sans-serif";
+    ctx.font = "bold 36px 'Segoe UI', system-ui, sans-serif";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     ctx.fillText("?", S / 2, S / 2 + 1);
     return;
   }
 
+  // All icon geometry is authored in a 48-unit design space; scale it up to the
+  // 64px canvas so icons read clearly without re-authoring every coordinate.
+  ctx.save();
+  ctx.scale(S / 48, S / 48);
   switch (itemId) {
     case "mushroom":
       drawMushroom(ctx, 24, 20, 14); // cap center + radius
@@ -91,14 +95,18 @@ export function drawItemIcon(ctx: CanvasRenderingContext2D, itemId: ItemId | nul
       ctx.arc(27, 20, 13, Math.PI * 2.05, Math.PI * 0.95, true);
       ctx.closePath();
       ctx.fill();
+      // White rim so the thin crescent reads against the dark plate.
+      ctx.strokeStyle = "rgba(255, 255, 255, 0.9)";
+      ctx.lineWidth = 2;
+      ctx.stroke();
       break;
     }
     case "star": {
-      drawStar(ctx, 24, 25, 17, 7, "#ffd93b", "#c79a00");
+      drawStar(ctx, 24, 25, 17, 7, "#ffd93b", "#ffffff");
       break;
     }
     case "lightning": {
-      // Thick yellow zigzag (4 segments) with a white core stroke.
+      // Thick yellow zigzag with a white rim + white core stroke.
       const bolt: ReadonlyArray<readonly [number, number]> = [
         [28, 6],
         [16, 26],
@@ -107,16 +115,21 @@ export function drawItemIcon(ctx: CanvasRenderingContext2D, itemId: ItemId | nul
         [33, 20],
         [24, 20],
       ];
+      strokePolyline(ctx, bolt, "#ffffff", 9); // white rim
       strokePolyline(ctx, bolt, "#ffd93b", 7);
       strokePolyline(ctx, bolt, "#ffffff", 2.5);
       break;
     }
     case "bulletBill": {
-      // Bullet Bill: a dark oval with angry eyes.
-      ctx.fillStyle = "#1a1a2e";
+      // Bullet Bill: a lighter navy oval with angry eyes + white rim. The old
+      // near-black #1a1a2e vanished into the dark item-slot plate.
+      ctx.fillStyle = "#3a3a5e";
       ctx.beginPath();
       ctx.ellipse(24, 24, 16, 12, 0, 0, Math.PI * 2);
       ctx.fill();
+      ctx.strokeStyle = "rgba(255, 255, 255, 0.9)";
+      ctx.lineWidth = 2;
+      ctx.stroke();
       // Eyes
       ctx.fillStyle = "#fff";
       ctx.beginPath();
@@ -131,6 +144,7 @@ export function drawItemIcon(ctx: CanvasRenderingContext2D, itemId: ItemId | nul
       break;
     }
   }
+  ctx.restore();
 }
 
 /** Red-capped mushroom: cap circle + white stem below + two white dots on the cap. */
@@ -147,6 +161,12 @@ function drawMushroom(ctx: CanvasRenderingContext2D, cx: number, cy: number, r: 
   ctx.arc(cx, cy, r, Math.PI, Math.PI * 2);
   ctx.closePath();
   ctx.fill();
+  // White rim on the cap for contrast.
+  ctx.strokeStyle = "rgba(255, 255, 255, 0.9)";
+  ctx.lineWidth = 2.5;
+  ctx.beginPath();
+  ctx.arc(cx, cy, r, Math.PI, Math.PI * 2);
+  ctx.stroke();
   // Two white dots on the cap.
   ctx.fillStyle = "#ffffff";
   ctx.beginPath();
@@ -160,6 +180,14 @@ function drawShell(ctx: CanvasRenderingContext2D, fill: string, rim: string): vo
   const cx = 24;
   const cy = 25;
   const r = 15;
+  // White backing silhouette (slightly larger) so the shell reads on the dark plate.
+  ctx.fillStyle = "rgba(255, 255, 255, 0.9)";
+  ctx.beginPath();
+  ctx.arc(cx, cy, r + 1.5, Math.PI, Math.PI * 2);
+  ctx.closePath();
+  ctx.fill();
+  ctx.fillRect(cx - r - 1.5, cy, (r + 1.5) * 2, 4 + 1.5);
+  // Colored dome.
   ctx.fillStyle = fill;
   ctx.beginPath();
   ctx.arc(cx, cy, r, Math.PI, Math.PI * 2); // dome (upper half)
@@ -323,8 +351,8 @@ export class Hud {
       itemSlot.dataset.testid = "hud-item-slot";
 
       const itemCanvas = document.createElement("canvas");
-      itemCanvas.width = 48;
-      itemCanvas.height = 48;
+      itemCanvas.width = 64;
+      itemCanvas.height = 64;
       itemSlot.appendChild(itemCanvas);
       root.appendChild(itemSlot);
       this.itemCanvas = itemCanvas;
@@ -461,6 +489,12 @@ export class Hud {
         this.flashItemSlot();
       }
       this.lastItemDrawn = item;
+    }
+
+    // Phase 5.1 — pulse the slot while the player holds a chargeable item (shell/banana)
+    // loaded on the kart's rear. Toggled per frame; the CSS animation loops while present.
+    if (this.itemSlotEl) {
+      this.itemSlotEl.classList.toggle("hud-item-slot-charging", playerKart.state.charging !== null);
     }
 
     // Step 8: speedometer. Needle angle from the normalized ratio; value is signed m/s

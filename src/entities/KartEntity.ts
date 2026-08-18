@@ -75,6 +75,7 @@ export function createKart(opts: CreateKartOpts): KartEntity {
       lap: lapState.lap,
       checkpointIdx: lapState.lastCheckpointIdx, // -1 spawn sentinel (see header)
       item: null,
+      charging: null,
       statusEffects: [],
       driftCharge: { ...NO_DRIFT },
       speedRatio: 0,

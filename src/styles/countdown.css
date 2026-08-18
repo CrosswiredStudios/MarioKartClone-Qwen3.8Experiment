@@ -8,7 +8,8 @@
   align-items: center;
   justify-content: center;
   gap: 28px;
-  background: radial-gradient(circle at 50% 40%, #2b2f4a 0%, #14162a 70%);
+  /* Phase 7 — transparent overlay: the live track world renders behind it. */
+  background: none;
   color: #fff;
   font-family: "Segoe UI", system-ui, sans-serif;
   z-index: 10;

@@ -29,6 +29,7 @@ import {
   StandardMaterial,
   TransformNode,
   Vector3,
+  VertexBuffer,
   type AbstractMesh,
   type Scene,
 } from "@babylonjs/core";
@@ -38,6 +39,7 @@ import type { PropKind, TrackDefinition } from "../data/tracks/shared.js";
 import { placeAlongSpline } from "./TrackBuilder.js";
 import type { HeightField } from "./TrackElevation.js";
 import type { TrackSpline } from "./TrackSpline.js";
+import { hash01, type Rgb } from "./terrainShading.js";
 
 /** v9 built-in polyhedron types: 0=tetra, 1=octa, 2=dodeca, 3=icosa. */
 const POLY_OCTA = 1;
@@ -195,46 +197,56 @@ export class PropBuilder {
   private buildSource(kind: PropKind): Mesh | null {
     const accent = hexToColor3(this.track.theme.accentColor);
     switch (kind) {
-      case "tree": // cone canopy + cylinder trunk
+      case "tree": // trunk + 3-tier conifer canopy (reads as a real tree, not a cone)
         return this.merge([
           this.part("trunk", () => MeshBuilder.CreateCylinder(`src-tree-trunk`, { height: 1.2, diameter: 0.4 }, this.scene), new Color3(0.42, 0.28, 0.15)),
-          this.part("canopy", () => MeshBuilder.CreateCylinder(`src-tree-canopy`, { height: 2.6, diameterTop: 0, diameterBottom: 2.4 }, this.scene), new Color3(0.18, 0.5, 0.2)),
+          this.part("canopyLow", () => MeshBuilder.CreateCylinder(`src-tree-canopy-low`, { height: 1.8, diameterTop: 0, diameterBottom: 2.4 }, this.scene), new Color3(0.16, 0.44, 0.18)),
+          this.part("canopyMid", () => MeshBuilder.CreateCylinder(`src-tree-canopy-mid`, { height: 1.5, diameterTop: 0, diameterBottom: 1.9 }, this.scene), new Color3(0.18, 0.5, 0.2)),
+          this.part("canopyTop", () => MeshBuilder.CreateCylinder(`src-tree-canopy-top`, { height: 1.2, diameterTop: 0, diameterBottom: 1.3 }, this.scene), new Color3(0.2, 0.55, 0.22)),
         ]);
-      case "mushroom": // cylinder stem + sphere cap (red)
+      case "mushroom": // cylinder stem + sphere cap (red) + white spot spheres
         return this.merge([
           this.part("stem", () => MeshBuilder.CreateCylinder(`src-mush-stem`, { height: 0.7, diameter: 0.4 }, this.scene), new Color3(0.92, 0.88, 0.8)),
           this.part("cap", () => MeshBuilder.CreateSphere(`src-mush-cap`, { diameter: 1.3, segments: 8 }, this.scene), new Color3(0.85, 0.15, 0.12)),
+          this.part("spot1", () => MeshBuilder.CreateSphere(`src-mush-spot1`, { diameter: 0.28, segments: 6 }, this.scene), new Color3(0.95, 0.93, 0.88)),
+          this.part("spot2", () => MeshBuilder.CreateSphere(`src-mush-spot2`, { diameter: 0.22, segments: 6 }, this.scene), new Color3(0.95, 0.93, 0.88)),
+          this.part("spot3", () => MeshBuilder.CreateSphere(`src-mush-spot3`, { diameter: 0.2, segments: 6 }, this.scene), new Color3(0.95, 0.93, 0.88)),
         ]);
       case "sign": // box board on a pole
         return this.merge([
           this.part("pole", () => MeshBuilder.CreateCylinder(`src-sign-pole`, { height: 1.4, diameter: 0.12 }, this.scene), new Color3(0.5, 0.5, 0.5)),
           this.part("board", () => MeshBuilder.CreateBox(`src-sign-board`, { width: 1.1, height: 0.7, depth: 0.08 }, this.scene), accent),
         ]);
-      case "flower": // small icosahedron blob
-        return this.single(
-          MeshBuilder.CreatePolyhedron("src-flower", { type: POLY_ICOSA, size: 0.35, flat: true }, this.scene),
-          new Color3(0.9, 0.4, 0.6),
-        );
-      case "rock": // flattened dodecahedron, dark stone
+      case "flower": // stem + icosahedron bloom
+        return this.merge([
+          this.part("stem", () => MeshBuilder.CreateCylinder(`src-flower-stem`, { height: 0.5, diameter: 0.06 }, this.scene), new Color3(0.2, 0.5, 0.25)),
+          this.part("bloom", () => MeshBuilder.CreatePolyhedron("src-flower-bloom", { type: POLY_ICOSA, size: 0.35, flat: true }, this.scene), new Color3(0.9, 0.4, 0.6)),
+        ]);
+      case "rock": // flattened dodecahedron, dark stone + vertex mottling
         return this.single(
           MeshBuilder.CreatePolyhedron("src-rock", { type: POLY_DODECA, size: 1.1, flat: true }, this.scene),
           new Color3(0.28, 0.24, 0.26),
+          undefined,
+          { r: 0.28, g: 0.24, b: 0.26 },
         );
-      case "geyser": // tapered cylinder vent base (plume is particles)
+      case "geyser": // tapered cylinder vent base (plume is particles) + vertex mottling
         return this.single(
           MeshBuilder.CreateCylinder("src-geyser", { height: 0.7, diameterTop: 1.0, diameterBottom: 1.5 }, this.scene),
           new Color3(0.35, 0.32, 0.34),
+          undefined,
+          { r: 0.35, g: 0.32, b: 0.34 },
         );
       case "torch": // pole + emissive flame sphere (point light only at High)
         return this.merge([
           this.part("pole", () => MeshBuilder.CreateCylinder(`src-torch-pole`, { height: 1.4, diameter: 0.16 }, this.scene), new Color3(0.35, 0.25, 0.18)),
           this.part("flame", () => MeshBuilder.CreateSphere(`src-torch-flame`, { diameter: 0.5, segments: 6 }, this.scene), new Color3(1, 0.55, 0.15)),
         ]);
-      case "crystal": // emissive octahedron in the track accent color
+      case "crystal": // emissive octahedron in the track accent color + vertex mottling
         return this.single(
           MeshBuilder.CreatePolyhedron("src-crystal", { type: POLY_OCTA, size: 0.7, flat: true }, this.scene),
           accent,
           new Color3(accent.r * 0.5, accent.g * 0.5, accent.b * 0.5),
+          { r: accent.r, g: accent.g, b: accent.b },
         );
       default:
         return null;
@@ -243,14 +255,35 @@ export class PropBuilder {
 
   // ── source-mesh helpers ────────────────────────────────────────────────
 
-  /** Single-part source mesh with its own material (optional emissive). */
-  private single(mesh: Mesh, color: Color3, emissive?: Color3): Mesh {
+  /** Single-part source mesh with its own material (optional emissive + vertex mottling). */
+  private single(mesh: Mesh, color: Color3, emissive?: Color3, mottleBase?: Rgb): Mesh {
     const mat = new StandardMaterial(`mat-${mesh.name}`, this.scene);
     mat.diffuseColor = color;
     if (emissive) mat.emissiveColor = emissive;
+    if (mottleBase) this.bakeMottling(mesh, mottleBase);
     mesh.material = mat;
     this.parkSource(mesh);
     return mesh;
+  }
+
+  /**
+   * Bake per-vertex mottling (±12% brightness, deterministic hash of local XZ) so
+   * flat-shaded polyhedra read as organic stone/crystal instead of a single tone.
+   * v9 auto-detects the color buffer (mesh.useVertexColors defaults to true).
+   */
+  private bakeMottling(mesh: Mesh, base: Rgb): void {
+    const positions = mesh.getVerticesData(VertexBuffer.PositionKind);
+    if (!positions) return;
+    const colors = new Float32Array(positions.length);
+    for (let i = 0; i < positions.length / 3; i++) {
+      const x = positions[i * 3];
+      const z = positions[i * 3 + 2];
+      const k = 0.88 + 0.24 * hash01(x * 3.1, z * 3.1);
+      colors[i * 3] = base.r * k;
+      colors[i * 3 + 1] = base.g * k;
+      colors[i * 3 + 2] = base.b * k;
+    }
+    mesh.setVerticesData(VertexBuffer.ColorKind, colors);
   }
 
   /** Create a raw part + assign it its own material (kept per-part via multiMultiMaterials). */
@@ -283,12 +316,22 @@ export class PropBuilder {
   /** Stack the parts of a multi-part prop so its base sits at y=0 (builders are centered). */
   private layoutParts(parts: Array<[Mesh, Color3]>): void {
     const names = new Set(parts.map(([m]) => m.name));
-    if (names.has("trunk") && names.has("canopy")) {
+    if (names.has("trunk") && names.has("canopyLow")) {
+      // 3-tier conifer: tiers overlap so the silhouette is a layered cone.
       this.setY(parts, "trunk", 0.6); // cylinder height 1.2 / 2
-      this.setY(parts, "canopy", 1.2 + 1.3); // trunk top + cone half-height (2.6 / 2)
+      this.setY(parts, "canopyLow", 1.2 + 0.9); // trunk top + low tier half-height (1.8 / 2)
+      this.setY(parts, "canopyMid", 1.2 + 1.6 + 0.75); // low tier top + mid half (1.5 / 2)
+      this.setY(parts, "canopyTop", 1.2 + 2.3 + 0.6); // mid tier top + top half (1.2 / 2)
     } else if (names.has("stem") && names.has("cap")) {
       this.setY(parts, "stem", 0.35); // cylinder height 0.7 / 2
       this.setY(parts, "cap", 1.05); // overlaps the stem top so there's no gap
+      // White spots sit on the upper hemisphere of the cap (cap center y=1.05, r=0.65).
+      this.setPos(parts, "spot1", 0.3, 1.5, 0.15);
+      this.setPos(parts, "spot2", -0.25, 1.45, -0.2);
+      this.setPos(parts, "spot3", 0.05, 1.62, -0.25);
+    } else if (names.has("stem") && names.has("bloom")) {
+      this.setY(parts, "stem", 0.25); // cylinder height 0.5 / 2
+      this.setY(parts, "bloom", 0.55); // bloom just above the stem top
     } else if (names.has("pole") && names.has("board")) {
       this.setY(parts, "pole", 0.7); // cylinder height 1.4 / 2
       this.setY(parts, "board", 1.2); // near the pole top
@@ -300,6 +343,10 @@ export class PropBuilder {
 
   private setY(parts: Array<[Mesh, Color3]>, name: string, y: number): void {
     for (const [m] of parts) if (m.name === name) m.position.y = y;
+  }
+
+  private setPos(parts: Array<[Mesh, Color3]>, name: string, x: number, y: number, z: number): void {
+    for (const [m] of parts) if (m.name === name) m.position.set(x, y, z);
   }
 
   /** Park a source mesh under root, far below the terrain. Instances keep their OWN transforms and visibility — only the (invisible) source geometry is hidden this way. */

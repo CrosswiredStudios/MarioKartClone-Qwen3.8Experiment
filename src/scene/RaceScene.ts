@@ -13,12 +13,12 @@
  * This file MAY import Babylon (render layer). No simulation math here.
  */
 
-import type { Camera } from "@babylonjs/core";
+import type { Camera ,
+  Scene} from "@babylonjs/core";
 import {
   Color3,
   MeshBuilder,
   PointLight,
-  Scene,
   StandardMaterial,
   TransformNode,
   UniversalCamera,
@@ -37,12 +37,34 @@ import { TrackSpline } from "../tracks/TrackSpline.js";
 import type { RaceController } from "../race/RaceController.js";
 import { ScreenShake } from "../vfx/ScreenShake.js";
 import { ChaseCamera } from "./ChaseCamera.js";
+import { ChargeIndicator } from "./ChargeIndicator.js";
+import { ShellRenderer } from "./ShellRenderer.js";
+import { countdownZoomEase, finishOutEase } from "./cameraEasing.js";
 
 /** Spin rate (rad/s) for the item-box visuals. */
 const ITEM_BOX_SPIN = 1.6;
 
 /** Neutral input for cosmetic render (no steer/pitch) — motion comes purely from state. */
-const NO_INPUT: DriveInput = Object.freeze({ throttle: 0, steer: 0, drifting: false, useItem: false });
+const NO_INPUT: DriveInput = Object.freeze({ throttle: 0, steer: 0, drifting: false, useItem: false, itemHeld: false });
+
+function lerp(a: number, b: number, t: number): number {
+  return a + (b - a) * t;
+}
+
+/** Component-wise Vector3 lerp into `out` (avoids per-frame allocations). */
+function lerpVec(out: { x: number; y: number; z: number }, a: { x: number; y: number; z: number }, b: { x: number; y: number; z: number }, t: number): void {
+  out.x = lerp(a.x, b.x, t);
+  out.y = lerp(a.y, b.y, t);
+  out.z = lerp(a.z, b.z, t);
+}
+
+/**
+ * Phase 7 — camera framing mode for the race scene:
+ *   - "countdown": wide grid view easing into the chase framing over the 3 s count (in-scene countdown).
+ *   - "chase":     normal speed-dependent chase follow (+ shake).
+ *   - "finishOut": high wide chase following the AI-driven player kart while the field finishes out.
+ */
+type RaceCamMode = "countdown" | "chase" | "finishOut";
 
 // ── Phase 6 podium sequence (T16) ────────────────────────────────────────────
 /** Podium box heights in meters for 1st / 2nd / 3rd. */
@@ -110,6 +132,24 @@ export class RaceScene implements IGameScreen {
   private renderers = new Map<string, KartRenderer>();
   private chaseCam: ChaseCamera | null = null;
 
+  // ── Phase 7 camera modes (in-scene countdown + finish-out wide view) ─────────
+  /** True while enter() has built the world — makes re-entry (Countdown → Racing) a no-op. */
+  private entered = false;
+  /** Current framing mode; initialized from race state on each real enter(). */
+  private camMode: RaceCamMode = "countdown";
+  /** Countdown wide-view camera position + look target, computed once per enter. */
+  private readonly widePos = new Vector3();
+  private readonly wideTarget = new Vector3();
+  /** Seconds since the scene entered in countdown mode (drives the zoom ease). */
+  private countdownClock = 0;
+  /** Finish-out blend: camera pos/fov at the moment the player finished. */
+  private finishFromPos: Vector3 | null = null;
+  private finishFromFov: number = TUNING.camera.fovMin;
+  /** Seconds since race:playerFinished (drives the wide-view ease). */
+  private finishClock = 0;
+  /** Exponential follower for the moving high-chase target in finish-out mode. */
+  private finishSmoothed: Vector3 | null = null;
+
   // ── Phase 5 render VFX (Step 10) ────────────────────────────────────────
   /** Camera-shake envelope, driven by kart:hit / kart:boosted / item:used(lightning). */
   private readonly shake = new ScreenShake();
@@ -121,6 +161,10 @@ export class RaceScene implements IGameScreen {
   private oilSlickMeshes: Mesh[] = [];
   /** Shared material for all slick discs (one dispose on exit). */
   private oilSlickMat: StandardMaterial | null = null;
+  /** Phase 5.1 — shell projectile mesh pool (render mirrors logic-owned shells). */
+  private shellRenderer: ShellRenderer | null = null;
+  /** Phase 5.1 — "item loaded on kart" billboard while the player charges. */
+  private chargeIndicator: ChargeIndicator | null = null;
 
   // ── Phase 6 podium sequence (T16) — render-only, driven from onFrame ───────
   /** True while the podium choreography is running (drive-up → step-up → settle). */
@@ -145,6 +189,17 @@ export class RaceScene implements IGameScreen {
   private prevActiveCamera: Camera | null = null;
 
   enter(_ctx: GameContext): void {
+    // Phase 7 (in-scene countdown): the scene is registered at Countdown enter and
+    // re-entered when the machine transitions Countdown → Racing. The world is built
+    // exactly once; re-entry only refreshes fog + shadow casters.
+    if (this.entered) {
+      const def = this.race.config.mapId === LAGOON_TRACK.id ? LAGOON_TRACK : MEADOWS_TRACK;
+      this.ctx.renderPipeline?.applyTheme(def.theme);
+      this.ctx.renderPipeline?.refreshShadowCasters();
+      return;
+    }
+    this.entered = true;
+
     const scene = this.ctx.scene as Scene;
     const def = this.race.config.mapId === LAGOON_TRACK.id ? LAGOON_TRACK : MEADOWS_TRACK;
 
@@ -177,6 +232,10 @@ export class RaceScene implements IGameScreen {
       const r = new KartRenderer(scene, k.color, `${k.id}-kart`);
       this.renderers.set(k.id, r);
     }
+
+    // Phase 5.1 — shell projectiles + charge indicator (render-only mirrors).
+    this.shellRenderer = new ShellRenderer(scene);
+    this.chargeIndicator = new ChargeIndicator(scene);
 
     // Phase 5 Step 10 — VFX wiring (render layer only; the controller emits the events).
     // Hit flash: each renderer flashes its own body white on kart:hit for that kart.
@@ -249,6 +308,83 @@ export class RaceScene implements IGameScreen {
         ),
       );
     }
+
+    // Phase 7 — camera mode subscriptions (per-enter, cleared on exit).
+    this.unsubs.push(
+      this.ctx.eventBus.on("race:start", () => {
+        if (this.camMode === "countdown") {
+          // Hand off to chase: seed the smoothed position at the current wide-view
+          // camera pos so the follow eases in from on-screen instead of jumping.
+          const camPos = this.chaseCam ? this.chaseCam.camera.position.clone() : null;
+          if (this.chaseCam && camPos) this.chaseCam.snapTo(camPos);
+          this.camMode = "chase";
+        }
+      }),
+      this.ctx.eventBus.on("race:playerFinished", () => {
+        if (this.camMode !== "finishOut") {
+          // Capture the current framing as the blend start point.
+          const camPos = this.chaseCam ? this.chaseCam.camera.position.clone() : null;
+          this.finishFromPos = camPos ?? new Vector3();
+          this.finishFromFov = this.chaseCam?.camera.fov ?? TUNING.camera.fovMin;
+          this.finishClock = 0;
+          this.finishSmoothed = null;
+          this.camMode = "finishOut";
+        }
+      }),
+    );
+
+    // Phase 7 — initialize the camera mode from live race state (a re-built scene for a
+    // new race always starts in countdown; the wide framing is computed below).
+    if (this.race.phase === "countdown") {
+      this.camMode = "countdown";
+      this.countdownClock = 0;
+      this.computeCountdownWideFraming();
+    } else {
+      // Defensive: scene entered mid-race (should not happen in the normal flow).
+      this.camMode = this.race.isPlayerFinished ? "finishOut" : "chase";
+      if (this.camMode === "finishOut") {
+        const camPos = this.chaseCam?.camera.position.clone() ?? new Vector3();
+        this.finishFromPos = camPos;
+        this.finishFromFov = this.chaseCam?.camera.fov ?? TUNING.camera.fovMin;
+        this.finishClock = 0;
+      }
+    }
+  }
+
+  /**
+   * Phase 7 — compute the wide grid framing for the in-scene countdown: a camera far
+   * enough back (and up) to see all four karts on the grid, behind the player's heading.
+   */
+  private computeCountdownWideFraming(): void {
+    const player = this.playerKart();
+    if (!player || !this.track) return;
+    const s = player.state;
+    const fx = Math.sin(s.heading);
+    const fz = Math.cos(s.heading);
+
+    // Bounding box of all karts (XZ + Y).
+    let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity, minY = Infinity, maxY = -Infinity;
+    for (const k of this.race.karts()) {
+      const p = k.state.pos;
+      if (p.x < minX) minX = p.x;
+      if (p.x > maxX) maxX = p.x;
+      if (p.z < minZ) minZ = p.z;
+      if (p.z > maxZ) maxZ = p.z;
+      if (p.y < minY) minY = p.y;
+      if (p.y > maxY) maxY = p.y;
+    }
+    const cx = (minX + maxX) / 2;
+    const cz = (minZ + maxZ) / 2;
+    const cy = (minY + maxY) / 2;
+
+    // Distance needed to frame the grid at the wide fov: cover half-diagonal + margin.
+    const halfDiag = Math.hypot(maxX - minX, maxZ - minZ) / 2;
+    const fov = TUNING.camera.countdownWideFov;
+    const distForGrid = (halfDiag + 4) / Math.tan(fov / 2);
+    const dist = Math.max(TUNING.camera.countdownMinDist, distForGrid);
+
+    this.widePos.set(s.pos.x - fx * dist, cy + dist * 0.55, s.pos.z - fz * dist);
+    this.wideTarget.set(cx, cy + 0.8, cz);
   }
 
   /** No physics here — the controller steps on the logic clock. (Esc→pause lands in Step 10.) */
@@ -258,22 +394,90 @@ export class RaceScene implements IGameScreen {
 
   /** Called once per render frame by GameApp for camera/render updates. */
   onFrame(dt: number): void {
+    this.tick(dt);
+  }
+
+  /**
+   * Phase 7 — one full scene frame (renderers + mode-driven camera + particle VFX).
+   * Public so GameApp can drive it explicitly during the finish-out phase, when the
+   * active screen is Results and onFrame no longer runs for this scene.
+   */
+  tick(dt: number): void {
     const terrain = this.track?.field;
     for (const k of this.race.karts()) {
       const r = this.renderers.get(k.id);
       if (r) r.update(k.state, NO_INPUT, dt, terrain ?? undefined);
     }
+
+    // Phase 5.1 — mirror live shells + the player's charge indicator.
+    this.shellRenderer?.update(this.race.shells());
+    this.chargeIndicator?.update(this.race.karts(), dt);
+
+    // Phase 7 — mode-driven camera.
     const player = this.playerKart();
     if (player && this.chaseCam) {
       const s = player.state;
       // Feed the renderer's smoothed Y so the look-target doesn't shimmer with jitter.
       const camY = this.renderers.get(player.id)?.renderedY ?? s.pos.y;
-      this.chaseCam.update(new Vector3(s.pos.x, camY, s.pos.z), s.heading, s.speedRatio, dt);
-      // Phase 5 Step 10 — camera shake: add the decaying-sine XZ offset in world space.
-      const off = this.shake.offset(dt);
-      if (off.x !== 0 || off.z !== 0) {
-        this.chaseCam.camera.position.x += off.x;
-        this.chaseCam.camera.position.z += off.z;
+      const kartPos = new Vector3(s.pos.x, camY, s.pos.z);
+
+      if (this.camMode === "countdown") {
+        // Wide grid view easing into the chase framing over the 3 s count.
+        this.countdownClock += dt;
+        const e = countdownZoomEase(this.countdownClock / TUNING.race.countdownSeconds);
+        const c = TUNING.camera;
+        const dist = lerp(c.distMin, c.distMax, s.speedRatio);
+        const height = lerp(c.heightMin, c.heightMax, s.speedRatio);
+        const fx = Math.sin(s.heading);
+        const fz = Math.cos(s.heading);
+        // Chase framing at the current (pre-start ≈ 0) speed — the zoom lands here.
+        const chaseX = kartPos.x - fx * dist;
+        const chaseY = kartPos.y + height;
+        const chaseZ = kartPos.z - fz * dist;
+        lerpVec(this.chaseCam.camera.position, this.widePos, { x: chaseX, y: chaseY, z: chaseZ }, e);
+        // Look target blends from the grid center to just above the player.
+        this.chaseCam.camera.setTarget(
+          new Vector3(
+            lerp(this.wideTarget.x, kartPos.x, e),
+            lerp(this.wideTarget.y, kartPos.y + 0.8, e),
+            lerp(this.wideTarget.z, kartPos.z, e),
+          ),
+        );
+        this.chaseCam.camera.fov = lerp(c.countdownWideFov, c.fovMin, e);
+      } else if (this.camMode === "chase") {
+        this.chaseCam.update(kartPos, s.heading, s.speedRatio, dt);
+        // Phase 5 Step 10 — camera shake: add the decaying-sine XZ offset in world space.
+        const off = this.shake.offset(dt);
+        if (off.x !== 0 || off.z !== 0) {
+          this.chaseCam.camera.position.x += off.x;
+          this.chaseCam.camera.position.z += off.z;
+        }
+      } else {
+        // finishOut — high wide chase following the AI-driven player kart while the
+        // field finishes out. Ease from the captured chase framing, then exponential
+        // follow of the moving target (frame-rate independent). No shake in this mode.
+        const f = TUNING.finishOut;
+        const fx = Math.sin(s.heading);
+        const fz = Math.cos(s.heading);
+        const targetX = kartPos.x - fx * f.camDist;
+        const targetY = kartPos.y + f.camHeight;
+        const targetZ = kartPos.z - fz * f.camDist;
+
+        this.finishClock += dt;
+        if (this.finishFromPos && this.finishClock < f.camEaseSec) {
+          const e = finishOutEase(this.finishClock / f.camEaseSec);
+          lerpVec(this.chaseCam.camera.position, this.finishFromPos, { x: targetX, y: targetY, z: targetZ }, e);
+        } else {
+          if (!this.finishSmoothed) this.finishSmoothed = this.chaseCam.camera.position.clone();
+          const k = 1 - Math.exp(-TUNING.camera.smoothing * dt);
+          lerpVec(this.finishSmoothed, this.finishSmoothed, { x: targetX, y: targetY, z: targetZ }, k);
+          this.chaseCam.camera.position.copyFrom(this.finishSmoothed);
+        }
+        // FOV eases from the captured value to the wide finish-out fov over the same window.
+        const fe = finishOutEase(Math.min(1, this.finishClock / f.camEaseSec));
+        this.chaseCam.camera.fov = lerp(this.finishFromFov, f.fov, fe);
+        // Look a bit ahead of the kart so the track ahead stays in frame.
+        this.chaseCam.camera.setTarget(new Vector3(kartPos.x + fx * 6, kartPos.y + 0.8, kartPos.z + fz * 6));
       }
     }
 
@@ -322,6 +526,11 @@ export class RaceScene implements IGameScreen {
     this.oilSlickMeshes = [];
     this.oilSlickMat?.dispose(false);
     this.oilSlickMat = null;
+    // Phase 5.1 — shell pool + charge indicator.
+    this.shellRenderer?.dispose();
+    this.shellRenderer = null;
+    this.chargeIndicator?.dispose();
+    this.chargeIndicator = null;
     // Phase 6 — particle VFX teardown: dispose every live system, restore any shrunk kart
     // meshes, remove the lightning overlay. No systems leak across races.
     this.ctx.particleVfx?.disposeAll();
@@ -336,6 +545,14 @@ export class RaceScene implements IGameScreen {
     this.chaseCam = null;
     this.track = null;
     this.spline = null;
+    // Phase 7 — reset camera-mode state so a re-entered scene (next race) starts clean.
+    this.entered = false;
+    this.camMode = "countdown";
+    this.countdownClock = 0;
+    this.finishFromPos = null;
+    this.finishFromFov = TUNING.camera.fovMin;
+    this.finishClock = 0;
+    this.finishSmoothed = null;
     if (this.prevActiveCamera) scene.activeCamera = this.prevActiveCamera;
   }
 

@@ -5,12 +5,18 @@ export interface GameEvents {
   "race:countdownTick": { remaining: 3 | 2 | 1 };
   // eslint-disable-next-line @typescript-eslint/no-empty-object-type -- `{}` is the intentional no-payload type for this event
   "race:start": {};
+  // Phase 7 (finish-out): the player crossed the line on the last lap. The race keeps
+  // simulating until every kart finishes or the AI grace deadline passes; this event is
+  // what routes Racing → Results and switches the camera to the wide spectator view.
+  // eslint-disable-next-line @typescript-eslint/no-empty-object-type -- `{}` is the intentional no-payload type for this event
+  "race:playerFinished": {};
   "race:lapCompleted": { kartId: string; lap: number; timeMs: number };
   "race:finished": { standings: Array<{ id: string; rank: number }>; times: Record<string, number> };
   "item:pickedUp": { kartId: string; item: string };
   "item:used": { kartId: string; item: string };
   "kart:hit": { kartId: string; byKartId?: string; shellKind?: "green" | "red" | "blue" };
-  "kart:boosted": { kartId: string; tier: "mini" | "super" | "shroom" };
+  // Phase 7 adds the "start" tier (perfect-start boost) alongside drift/shroom tiers.
+  "kart:boosted": { kartId: string; tier: "mini" | "super" | "shroom" | "start" };
   "kart:skid": { kartId: string; cause: "banana" | "oilSlick" };
   "ui:navigate": { to: GameScreenId };
 }

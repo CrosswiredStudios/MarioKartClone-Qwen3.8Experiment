@@ -92,6 +92,7 @@ export const MEADOWS_TRACK: TrackDefinition = {
     accentColor: "#e8c547",
     skyTop: "#aee3ff",
     skyBottom: "#fdf6c9", // light blue -> pale yellow
+    skybox: "textures/skybox_meadows", // TropicalSunnyDay cubemap (Babylon playground library)
     fogColor: "#eaf6ff",
     fogDensity: 0.002, // very light
     sunIntensity: 1.0,

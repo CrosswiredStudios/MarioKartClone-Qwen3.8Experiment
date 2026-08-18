@@ -17,6 +17,7 @@ function makeState(overrides: Partial<KartState> = {}): KartState {
     lap: 0,
     checkpointIdx: -1,
     item: null,
+    charging: null,
     statusEffects: [],
     driftCharge: { ...NO_DRIFT },
     speedRatio: 0,
@@ -26,7 +27,7 @@ function makeState(overrides: Partial<KartState> = {}): KartState {
 }
 
 function input(over: Partial<DriveInput> = {}): DriveInput {
-  return Object.freeze({ throttle: 0, steer: 0, drifting: false, useItem: false, ...over });
+  return Object.freeze({ throttle: 0, steer: 0, drifting: false, useItem: false, itemHeld: false, ...over });
 }
 
 /** Run n steps with a constant input; returns the final state. */

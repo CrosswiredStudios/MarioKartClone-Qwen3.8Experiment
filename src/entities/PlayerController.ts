@@ -19,6 +19,8 @@ export class PlayerController {
       // Space held while actually turning (a straight-line "drift" does nothing).
       drifting: this.input.button("drift") && Math.abs(steer) > 0,
       useItem: this.input.justPressed("item"),
+      // Level-triggered: true while the item key is down (hold-to-charge mechanic).
+      itemHeld: this.input.buttonHeld("item"),
     });
   }
 }

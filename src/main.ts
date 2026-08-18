@@ -114,9 +114,15 @@ declare global {
         };
       };
       standings(): Array<{ id: string; name: string; rank: number; lap: number; t: number }>;
-      karts(): Array<{ id: string; pos: { x: number; y: number; z: number }; speed: number; lap: number; item: unknown }>;
+      karts(): Array<{ id: string; pos: { x: number; y: number; z: number }; speed: number; lap: number; item: unknown; charging: unknown }>;
+      /** Phase 7 — race controller phase ("countdown" | "racing" | "finished" | "none"). */
+      racePhase(): string;
+      /** Phase 5.1 — live shell projectile count (0 when no race is active). */
+      shells(): number;
       /** Present only when debugAllowed (dev mode or ?debug URL param). */
       aiDrivePlayer?(): void;
+      /** Present only when debugAllowed — force the player's held item (e2e / playtest). */
+      setItem?(item: string): void;
     };
   }
 }
@@ -130,7 +136,11 @@ window.__game = {
   snapshot: () => app.snapshot(),
   standings: () => app.raceStandings(),
   karts: () => app.raceKartSummary(),
-  ...(debugAllowed ? { aiDrivePlayer: () => app.aiDrivePlayer() } : {}),
+  racePhase: () => app.racePhase(),
+  shells: () => app.shellCount(),
+  ...(debugAllowed
+    ? { aiDrivePlayer: () => app.aiDrivePlayer(), setItem: (item: string) => app.debugSetPlayerItem(item) }
+    : {}),
 };
 
 // Debug handle for browser playtests (screenshots are unavailable in this env):

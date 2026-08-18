@@ -19,8 +19,14 @@ function lerp(a: number, b: number, t: number): number {
 
 export class ChaseCamera {
   readonly camera: UniversalCamera;
-  private readonly pos = new Vector3(); // smoothed position we ease toward the target
+  /** Smoothed position we ease toward the target (exposed for render-layer blending). */
+  private readonly pos = new Vector3();
   private initialized = false;
+
+  /** The smoothed camera position (read-only copy) — used when blending into/out of chase. */
+  get position(): Vector3 {
+    return this.pos.clone();
+  }
 
   constructor(scene: Scene, initialPos: Vector3) {
     this.camera = new UniversalCamera("chase-camera", initialPos.clone(), scene);
@@ -56,6 +62,18 @@ export class ChaseCamera {
     this.camera.position.copyFrom(this.pos);
     this.camera.setTarget(new Vector3(kartPos.x, kartPos.y + 0.8, kartPos.z));
     this.camera.fov = fov;
+  }
+
+  /**
+   * Phase 7 — seed the smoothed position (and camera) to `p` without easing.
+   * Used when switching INTO chase mode from another framing (countdown zoom /
+   * finish-out wide view) so the follow eases FROM the current on-screen position
+   * instead of jumping.
+   */
+  snapTo(p: Vector3): void {
+    this.pos.copyFrom(p);
+    this.camera.position.copyFrom(this.pos);
+    this.initialized = true;
   }
 
   dispose(): void {

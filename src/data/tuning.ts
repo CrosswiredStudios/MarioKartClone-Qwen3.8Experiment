@@ -17,7 +17,18 @@ export const TUNING = {
   drift: { charge1Time: 0.6, charge2Time: 1.4, miniBoostSpeed: 38, superBoostSpeed: 46, boostDuration: 0.8 },
   // Chase camera (Phase 3 Task 6). dist/height/fov lerp with speedRatio; smoothing is the
   // exponential-follow rate (higher = snappier). See KartRenderer / FreeDriveScene.
-  camera: { distMin: 5, distMax: 7, heightMin: 2.2, heightMax: 3, fovMin: 0.8, fovMax: 1.0, smoothing: 6 },
+  camera: {
+    distMin: 5,
+    distMax: 7,
+    heightMin: 2.2,
+    heightMax: 3,
+    fovMin: 0.8,
+    fovMax: 1.0,
+    smoothing: 6,
+    // Phase 7 in-scene countdown: the wide grid framing before the zoom into chase.
+    countdownWideFov: 1.25, // fov of the wide view (eases down to fovMin at GO)
+    countdownMinDist: 30, // m — floor on the wide-view distance behind the player
+  },
   // Items & weapons (Phase 5). Every gameplay constant for the item system lives here.
   items: {
     shroomBoost: 40, // m/s forced while a shroom boost is active
@@ -26,6 +37,7 @@ export const TUNING = {
     bananaSkid: 1.0, // s of spin from picking up a banana
     shellBounceMax: 3, // green-shell bounce limit (wall + kart bounces)
     shroomDurationSec: 1.5,
+    shellLaunchOffsetM: 1.2, // shell spawns this far behind kart center (along -forward) on release
     greenSpeedFactor: 2.0, // × owner current speed at fire
     redSpeedFactor: 1.6, // × owner maxSpeed
     blueSpeedFactor: 2.2, // × TUNING.physics.maxSpeedBase
@@ -54,7 +66,25 @@ export const TUNING = {
   ai: { rubberBandFactor: 0.06, speedVariance: 0.08, waypointLookahead: 12 },
   // Race loop (Phase 4). countdownSeconds = 3-2-1-GO at 1 s intervals; standings are
   // recomputed once per second (not per frame) to avoid float-noise rank flicker.
-  race: { countdownSeconds: 3, checkpointsPerLap: 8, standingsIntervalSec: 1, aiFinishTimeoutSec: 10 },
+  race: {
+    countdownSeconds: 3,
+    checkpointsPerLap: 8,
+    standingsIntervalSec: 1,
+    aiFinishTimeoutSec: 10,
+    // Perfect start (Phase 7): gas pressed within this window after GO grants a boost.
+    perfectStartWindowSec: 0.3,
+    startBoostSpeed: 40, // m/s forced while the start boost is active
+    startBoostDurationSec: 1.2,
+  },
+  // Finish-out spectator view (Phase 7): after the player crosses the line on the last
+  // lap, the camera eases to a high chase framing and follows the AI-driven player kart
+  // while the rest of the field finishes out.
+  finishOut: {
+    camDist: 28, // m behind the kart (vs ~5–7 for normal chase)
+    camHeight: 16, // m above the kart
+    fov: 1.15,
+    camEaseSec: 1.5, // seconds to ease from the current framing into the wide view
+  },
   // Themed terrain (Phase 4.1). The pure heightfield (TrackElevation) and the render
   // layer both read from here — no raw numbers elsewhere.
   terrain: {

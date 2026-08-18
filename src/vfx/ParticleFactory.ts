@@ -23,13 +23,14 @@
  *     purely visual (08-phase-6 T6).
  */
 
+import type {
+  Scene} from "@babylonjs/core";
 import {
   Color4,
   DynamicTexture,
   MeshBuilder,
   ParticleSystem,
   PointLight,
-  Scene,
   StandardMaterial,
   Vector3,
   type Mesh,
@@ -216,8 +217,8 @@ export class ParticleFactory {
 
   // ── T3 — boostFlames ────────────────────────────────────────────────────
 
-  /** Cone emitter at the kart rear, ~0.8 s, color by tier (mini/super/shroom). */
-  boostFlames(view: KartVfxView, tier: "mini" | "super" | "shroom"): void {
+  /** Cone emitter at the kart rear, ~0.8 s, color by tier (mini/super/shroom/start). */
+  boostFlames(view: KartVfxView, tier: "mini" | "super" | "shroom" | "start"): void {
     const budget = this.quality.budget();
     const rate = Math.max(1, Math.round(TUNING.vfx.boostEmitRatePerSec * budget));
     const sys = new ParticleSystem(`boost-${view.id}`, rate, this.scene);
@@ -548,7 +549,7 @@ export class ParticleFactory {
 }
 
 /** Tier → (start color, end color) for boost flames. */
-function boostColors(tier: "mini" | "super" | "shroom"): [Color4, Color4] {
+function boostColors(tier: "mini" | "super" | "shroom" | "start"): [Color4, Color4] {
   switch (tier) {
     case "mini": // white sparks
       return [new Color4(1, 1, 1, 1), new Color4(0.9, 0.95, 1, 1)];
@@ -556,5 +557,7 @@ function boostColors(tier: "mini" | "super" | "shroom"): [Color4, Color4] {
       return [new Color4(0.6, 0.8, 1, 1), new Color4(0.3, 0.5, 1, 1)];
     case "shroom": // orange
       return [new Color4(1, 0.6, 0.2, 1), new Color4(1, 0.35, 0.1, 1)];
+    case "start": // white-gold (perfect start boost)
+      return [new Color4(1, 0.95, 0.7, 1), new Color4(1, 0.8, 0.3, 1)];
   }
 }

@@ -96,8 +96,11 @@ export function makeShell(init: ShellProjectileInit, simTime: number): ShellStat
       expiresAt = simTime + TUNING.items.blueExpiresSec;
       break;
   }
+  // Spawn behind the kart (along -forward) so the shell visibly launches from the
+  // rear — matches the hold-to-charge "attached to the vehicle" feel.
+  const rear = TUNING.items.shellLaunchOffsetM;
   return {
-    pos: { x: o.pos.x, y: o.pos.y + 0.5, z: o.pos.z },
+    pos: { x: o.pos.x - f.x * rear, y: o.pos.y + 0.5, z: o.pos.z - f.z * rear },
     vel: { x: f.x * speed, y: 0, z: f.z * speed },
     kind: init.kind,
     ownerId: init.owner.id,

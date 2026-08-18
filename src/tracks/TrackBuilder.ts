@@ -14,6 +14,7 @@ import {
   DynamicTexture,
   MeshBuilder,
   StandardMaterial,
+  Texture,
   TransformNode,
   Vector3,
   type Scene,
@@ -138,7 +139,15 @@ export class TrackBuilder {
     ground.position.x = (b.minX + b.maxX) / 2;
     ground.position.z = (b.minZ + b.maxZ) / 2;
     const mat = new StandardMaterial("ground-mat", this.scene);
-    mat.diffuseColor = hexToColor3(this.track.theme.groundColor);
+    const grassTex = new Texture("textures/grass.jpg", this.scene);
+    grassTex.wrapU = Texture.WRAP_ADDRESSMODE;
+    grassTex.wrapV = Texture.WRAP_ADDRESSMODE;
+    grassTex.anisotropicFiltering = true;
+    // ~2 m per tile so individual grass blades read at chase-camera distance.
+    grassTex.uScale = spanX / 2;
+    grassTex.vScale = spanZ / 2;
+    mat.diffuseTexture = grassTex;
+    mat.diffuseColor = Color3.White(); // no tint — the texture carries the color
     mat.specularColor = Color3.Black();
     ground.material = mat;
     ground.parent = this.root;
@@ -224,8 +233,9 @@ export class TrackBuilder {
 
   private buildRoadMaterial(): StandardMaterial {
     const mat = new StandardMaterial("road-mat", this.scene);
-    // Procedural asphalt + lane markings. The texture repeats along the loop via UV v.
-    const tex = new DynamicTexture("road-tex", { width: 128, height: 64 }, this.scene, false);
+    // Procedural asphalt + lane markings + rumble strips. The texture repeats
+    // along the loop via UV v.
+    const tex = new DynamicTexture("road-tex", { width: 256, height: 128 }, this.scene, false);
     drawLaneTexture(tex.getContext(), this.track.theme.accentColor);
     // CRITICAL: push the canvas content to the GPU. Without update() a fresh
     // DynamicTexture is transparent, so a lit material sampling it renders nothing
@@ -241,6 +251,10 @@ export class TrackBuilder {
 
   private buildBarriers(): void {
     const count = Math.max(8, Math.floor(this.spline.length / BARRIER_ARC_SPACING));
+    // ONE shared striped material for every post (was: a fresh material per post —
+    // hundreds of identical materials). The stripe texture is tiny and repeats
+    // vertically across each post's V span.
+    const mat = this.buildBarrierMaterial();
     for (const side of [-1, 1]) {
       for (let i = 0; i < count; i++) {
         const t = i / count;
@@ -254,12 +268,27 @@ export class TrackBuilder {
         const post = MeshBuilder.CreateBox(`barrier-${side}-${i}`, { width: 0.35, height, depth: 0.35 }, this.scene);
         post.position.set(place.pos.x, groundY + height / 2, place.pos.z);
         post.rotation.y = place.rotationY;
-        const mat = new StandardMaterial("barrier-mat", this.scene);
-        mat.diffuseColor = hexToColor3(this.track.theme.accentColor);
         post.material = mat;
         post.parent = this.root;
       }
     }
+  }
+
+  /** Accent/white vertical stripes — the classic kart-race barrier look. */
+  private buildBarrierMaterial(): StandardMaterial {
+    const mat = new StandardMaterial("barrier-mat", this.scene);
+    const tex = new DynamicTexture("barrier-tex", { width: 16, height: 32 }, this.scene, false);
+    const ctx = tex.getContext();
+    if (ctx) {
+      ctx.fillStyle = "#f2f2f2";
+      ctx.fillRect(0, 0, 16, 32);
+      ctx.fillStyle = this.track.theme.accentColor;
+      ctx.fillRect(0, 0, 16, 16);
+    }
+    tex.update();
+    mat.diffuseTexture = tex;
+    mat.specularColor = Color3.Black();
+    return mat;
   }
 
   private buildItemBoxAnchors(): void {
@@ -275,11 +304,6 @@ export class TrackBuilder {
   }
 }
 
-function hexToColor3(hex: string): Color3 {
-  const n = parseInt(hex.slice(1), 16);
-  return new Color3(((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255);
-}
-
 /** Minimal canvas context surface — matches Babylon's ICanvasRenderingContext. */
 interface LaneCtx {
   canvas: { width: number; height: number };
@@ -288,21 +312,46 @@ interface LaneCtx {
   fillRect(x: number, y: number, w: number, h: number): void;
 }
 
-/** Asphalt base with a dashed center line and solid edge lines. */
+/**
+ * Asphalt with grain, tire-wear bands, rumble strips at the edges, a dashed
+ * center line and solid edge lines. 256×128: u spans the road width, v repeats
+ * along the loop (vScale = ROAD_SAMPLES/4 → one tile ≈ 100 m of track).
+ */
 function drawLaneTexture(ctx: LaneCtx, accentHex: string): void {
   const w = ctx.canvas.width;
   const h = ctx.canvas.height;
-  // Asphalt.
+  // Asphalt base.
   ctx.fillStyle = "#3a3d42";
   ctx.fillRect(0, 0, w, h);
-  // Solid edge lines (left/right).
+  // Asphalt grain: deterministic speckle (no Math.random — keeps the bake stable).
+  for (let i = 0; i < 900; i++) {
+    const gx = (i * 73) % w;
+    const gy = (i * 151) % h;
+    const shade = 40 + ((i * 37) % 30);
+    ctx.fillStyle = `rgb(${shade},${shade + 2},${shade + 6})`;
+    ctx.fillRect(gx, gy, 2, 2);
+  }
+  // Tire-wear bands: darker strips where the karts actually drive.
+  ctx.fillStyle = "rgba(20,22,26,0.35)";
+  ctx.fillRect(w * 0.28, 0, w * 0.14, h);
+  ctx.fillRect(w * 0.58, 0, w * 0.14, h);
+  // Rumble strips: red/white blocks at both edges (the iconic kart look).
+  const rumbleW = 14;
+  const blockH = h / 8;
+  for (let y = 0; y < h; y += blockH) {
+    const even = Math.floor(y / blockH) % 2 === 0;
+    ctx.fillStyle = even ? "#d23b2f" : "#f2f2f2";
+    ctx.fillRect(0, y, rumbleW, blockH);
+    ctx.fillRect(w - rumbleW, y, rumbleW, blockH);
+  }
+  // Solid edge lines just inside the rumble strips.
   ctx.fillStyle = "#e8e8e8";
-  ctx.fillRect(6, 0, 5, h);
-  ctx.fillRect(w - 11, 0, 5, h);
+  ctx.fillRect(rumbleW + 4, 0, 5, h);
+  ctx.fillRect(w - rumbleW - 9, 0, 5, h);
   // Dashed center line.
   ctx.fillStyle = accentHex;
   const dashH = h / 2;
   for (let y = 0; y < h; y += dashH * 2) {
-    ctx.fillRect(w / 2 - 3, y + dashH * 0.15, 6, dashH * 0.7);
+    ctx.fillRect(w / 2 - 4, y + dashH * 0.15, 8, dashH * 0.7);
   }
 }

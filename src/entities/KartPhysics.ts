@@ -63,6 +63,14 @@ export interface DriveInput {
   readonly steer: number; // -1..1
   readonly drifting: boolean; // Space held while turning
   readonly useItem: boolean; // edge-triggered, consumed by RaceController
+  /**
+   * Level-triggered: true while the item button is held. The RaceController uses
+   * this for the hold-to-charge mechanic on chargeable items (green/red shell,
+   * banana): the item is "loaded" on the kart's rear while held and fires on
+   * release. Non-chargeable items still fire on the `useItem` edge. AI karts
+   * always report false (they fire immediately).
+   */
+  readonly itemHeld: boolean;
 }
 
 export interface KartState {
@@ -73,6 +81,14 @@ export interface KartState {
   lap: number;
   checkpointIdx: number; // 0-based
   item: ItemId | null;
+  /**
+   * Hold-to-charge (Phase 5.1): the item currently "loaded" on the kart's rear
+   * while the player holds the item button. Set by the RaceController for
+   * chargeable items (green/red shell, banana); null when not charging. The
+   * render layer reads this to show the charge indicator; the item is consumed
+   * on release.
+   */
+  charging: ItemId | null;
   statusEffects: StatusEffect[];
   driftCharge: DriftCharge; // full wrapper {tier, chargeTime} — see DriftController header
   speedRatio: number; // 0..1 normalized top speed (audio/camera)
