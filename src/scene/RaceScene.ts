@@ -30,6 +30,7 @@ import { LAGOON_TRACK, MEADOWS_TRACK } from "../data/tracks/index.js";
 import { TUNING } from "../data/tuning.js";
 import type { KartEntity } from "../entities/KartEntity.js";
 import type { DriveInput } from "../entities/KartPhysics.js";
+import { KartBody } from "../entities/KartBody.js";
 import { KartRenderer } from "../entities/KartRenderer.js";
 import { PropBuilder } from "../tracks/PropBuilder.js";
 import { TrackBuilder } from "../tracks/TrackBuilder.js";
@@ -132,6 +133,8 @@ export class RaceScene implements IGameScreen {
   private props: PropBuilder | null = null;
   private spline: TrackSpline | null = null;
   private renderers = new Map<string, KartRenderer>();
+  /** Physics rewrite — one rigid body per kart (null physics world → empty map). */
+  private bodies = new Map<string, KartBody>();
   private chaseCam: ChaseCamera | null = null;
 
   // ── Phase 7 camera modes (in-scene countdown + finish-out wide view) ─────────
@@ -218,6 +221,9 @@ export class RaceScene implements IGameScreen {
     this.track = new TrackBuilder(scene, this.spline, def);
     this.track.build();
 
+    // Physics rewrite — static terrain heightfield body (null physics world → skipped).
+    this.ctx.physicsWorld?.buildTerrain(this.track.field);
+
     // Phase 6: themed props (trees/mushrooms/rocks/torches/…). Parented under track-root so
     // the shadow-caster sweep sees them; null quality probe (headless) → skipped.
     if (this.ctx.qualityProbe) {
@@ -235,6 +241,18 @@ export class RaceScene implements IGameScreen {
       const r = new KartRenderer(scene, k.color, `${k.id}-kart`, vehicleType);
       kartRoots.push(r.root);
       this.renderers.set(k.id, r);
+
+      // Physics rewrite — rigid body per kart (null physics world → kinematic fallback).
+      if (this.ctx.physicsWorld) {
+        const b = new KartBody(scene, k);
+        k.drive = b;
+        this.bodies.set(k.id, b);
+        // Bump feedback is player-centric: only the player's body reports bumps.
+        if (k.id === "player") {
+          b.onBump = (otherKartId, impulse) =>
+            this.ctx.eventBus.emit("kart:bumped", { kartId: k.id, otherKartId, impulse });
+        }
+      }
     }
 
     // Phase 6: point the shadow generator at the freshly-built track + prop meshes AND
@@ -521,6 +539,12 @@ export class RaceScene implements IGameScreen {
 
   exit(): void {
     const scene = this.ctx.scene as Scene;
+    // Physics rewrite — detach + dispose every kart body, then drop the terrain.
+    for (const k of this.race.karts()) k.drive = null;
+    for (const b of this.bodies.values()) b.dispose();
+    this.bodies.clear();
+    this.ctx.physicsWorld?.clearTerrain();
+
     for (const r of this.renderers.values()) r.dispose();
     this.renderers.clear();
     // Phase 5 Step 10 — tear down VFX: detach shake listeners, drop hit-flash subs,
@@ -732,6 +756,11 @@ export class RaceScene implements IGameScreen {
   /** Terrain height (road level) at a world XZ — podium karts rest on the road surface. */
   private terrainYAt(x: number, z: number): number {
     return this.track ? this.track.field.heightAt(x, z) + TUNING.terrain.roadYOffset : 0;
+  }
+
+  /** Debug (window.__game.fieldHeightAt) — raw field ground truth at a world XZ. */
+  debugFieldHeightAt(x: number, z: number): number {
+    return this.track ? this.track.field.heightAt(x, z) : NaN;
   }
 
   /**

@@ -1,5 +1,7 @@
 import type { TrackTheme } from "../data/tracks/shared.js";
 import type { IInputSource } from "../input/IInputSource.js";
+import type { HeightField } from "../tracks/TrackElevation.js";
+import type { Vec3 } from "./Vec.js";
 import type { RaceConfig } from "./RaceConfig.js";
 import type { EventBus, GameEvents } from "./EventBus.js";
 
@@ -86,6 +88,28 @@ export interface IParticleVfx {
   disposeAll(): void;
 }
 
+/**
+ * Physics rewrite — opaque Havok-world handle. The concrete class lives in
+ * src/scene/PhysicsWorld.ts (Babylon); this structural interface keeps core
+ * Babylon-free. Set by main.ts via GameApp.setPhysicsWorld() after awaiting init();
+ * null in headless tests, where scenes guard with `?.`.
+ */
+export interface IPhysicsWorld {
+  /** True once the WASM plugin is loaded and physics is enabled on the scene. */
+  readonly ready: boolean;
+  /** Build/replace the static terrain heightfield body from a pure HeightField. */
+  buildTerrain(field: HeightField): void;
+  /** Dispose the terrain body (per-race teardown). */
+  clearTerrain(): void;
+  /** Freeze/thaw the whole sim — GameApp toggles this while Paused. */
+  setFrozen(frozen: boolean): void;
+  /**
+   * Raycast against the physics world (suspension, ground probes). Returns null on
+   * a miss. Pure-data in/out so core never touches Babylon Vector3.
+   */
+  raycast(from: Vec3, to: Vec3): { point: Vec3; normal: Vec3 } | null;
+}
+
 export const GAME_SCREEN_IDS = [
   "MainMenu",
   "CharacterSelect",
@@ -145,6 +169,12 @@ export interface GameContext {
    * GameApp.setQualityProbe(); null in headless tests. Map scenes pass it to the PropBuilder.
    */
   qualityProbe: IQualityProbe | null;
+  /**
+   * Physics rewrite — opaque Havok-world handle (see IPhysicsWorld above). Set by
+   * main.ts via GameApp.setPhysicsWorld() after awaiting init(); null in headless
+   * tests, where scenes guard with `?.`.
+   */
+  physicsWorld: IPhysicsWorld | null;
 }
 
 export interface IGameScreen {

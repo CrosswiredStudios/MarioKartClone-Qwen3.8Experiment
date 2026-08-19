@@ -31,6 +31,7 @@ import {
   type IDrivableScreen,
   type IGameScreen,
   type IParticleVfx,
+  type IPhysicsWorld,
   type IQualityProbe,
   type IRenderPipeline,
 } from "./GameStateMachine.js";
@@ -313,9 +314,23 @@ export class GameApp {
     this.ctx.qualityProbe = probe;
   }
 
+  /**
+   * Physics rewrite — wire the render-layer PhysicsWorld into the context (called by
+   * main.ts after awaiting init()). Kept opaque so core stays Babylon-free; map scenes
+   * read ctx.physicsWorld for terrain bodies + suspension raycasts.
+   */
+  setPhysicsWorld(world: IPhysicsWorld): void {
+    this.ctx.physicsWorld = world;
+  }
+
   /** Step 12 debug hook — enables AI driving of the player kart (e2e / manual testing). */
   aiDrivePlayer(): void {
     this.race?.enableAiDrive();
+  }
+
+  /** Debug hook — raw heightfield ground truth at a world XZ (NaN when no race scene). */
+  fieldHeightAt(x: number, z: number): number {
+    return this.raceScene ? this.raceScene.debugFieldHeightAt(x, z) : NaN;
   }
 
   /**
@@ -364,6 +379,7 @@ export class GameApp {
       renderPipeline: null, // set by main.ts via setRenderPipeline() post-construction
       particleVfx: null, // set by main.ts via setParticleVfx() post-construction
       qualityProbe: null, // set by main.ts via setQualityProbe() post-construction
+      physicsWorld: null, // set by main.ts via setPhysicsWorld() after awaiting init()
     };
     this.machine = new GameStateMachine("MainMenu", this.eventBus, this.ctx);
     // HUD reads the live controller through a getter so it always sees the current race.
@@ -562,6 +578,12 @@ export class GameApp {
       // Oil slicks are silent (on-road surface change, no slip sound in the catalog).
     });
 
+    // Physics rewrite — rigid-body kart↔kart bump. Reuses the shell-bounce clank;
+    // the emitter only fires for player-involved bumps above the impulse threshold.
+    this.eventBus.on("kart:bumped", ({ kartId }) => {
+      if (isPlayer(kartId)) this.sfx.shellBounce();
+    });
+
     this.machine.activateInitial();
 
     this.input.attach();
@@ -595,8 +617,14 @@ export class GameApp {
       }
     }
 
-    // While Paused, ALL logic is frozen — no race stepping, no HUD refresh, no screen updates.
-    if (id === "Paused") return;
+    // While Paused, ALL logic is frozen — no race stepping, no HUD refresh, no screen
+    // updates. The physics sim freezes too: the Scene auto-steps Havok every render frame,
+    // so we gate it with scene.physicsEnabled (toggled through the opaque handle).
+    if (id === "Paused") {
+      this.ctx.physicsWorld?.setFrozen(true);
+      return;
+    }
+    this.ctx.physicsWorld?.setFrozen(false);
 
     // Phase 4 (race mode only): step the race controller while in Countdown or Racing.
     // It owns all simulation math and emits race:* events; the screens are presentational.

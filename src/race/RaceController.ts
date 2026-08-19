@@ -431,9 +431,16 @@ export class RaceController {
       // Surface from the CURRENT position (pre-step).
       const surface = this.classifySurface({ x: k.state.pos.x, z: k.state.pos.z });
 
+      // Physics rewrite — when a rigid body is attached (render mode), it owns
+      // position/vertical motion. sync() reads the body's real pos/heading/speed into
+      // state BEFORE the brain step; the brain then runs WITHOUT terrain so its slope
+      // speed model and surface-glue stay out of the way (Havok gravity + heightfield
+      // replace them). Headless (no drive) → legacy kinematic path, unchanged.
+      k.drive?.sync(k);
+
       // Physics step (pure) with the kart's skill + rubber-band scales + terrain
-      // (surface-glued Y and the mild slope speed model).
-      let next = stepKart(k.state, input, surface, dt, k.topSpeedScale, k.accelScale, this.terrain);
+      // (surface-glued Y and the mild slope speed model — kinematic path only).
+      let next = stepKart(k.state, input, surface, dt, k.topSpeedScale, k.accelScale, k.drive ? undefined : this.terrain);
 
       // Drift charge; on release grant the mini/super boost (same path as free-drive).
       const drift = updateDrift(next.driftCharge, input, dt);
@@ -456,6 +463,11 @@ export class RaceController {
 
       k.state = next;
       rt.lastT = cpPost.t;
+
+      // Physics rewrite — push the brain's target speed/heading onto the rigid body.
+      // Must run AFTER `k.state = next` so apply() reads the fresh targets, and BEFORE
+      // any direct state mutations below (oil skid etc.) that the next sync() would see.
+      k.drive?.apply(next, dt);
 
       // Phase 5 — oil slick: grant a skid on FIRST contact per patch (per-patch guard).
       if (surface === "oilSlick") {
@@ -725,6 +737,13 @@ export class RaceController {
     victim.state.speed *= it.hitSlowFactor;
     victim.state.heading += this.rng.range(-0.35, 0.35); // seeded kick, applied once at grant
     victim.state.statusEffects.push({ kind: "hit", remaining: it.hitDurationSec });
+    // Physics rewrite — with a body attached the state writes above get overwritten by the
+    // next sync(), so push them onto the body as real impulses. Runs after this step's
+    // apply() (item pipeline is later in update()), which kickYaw relies on.
+    if (victim.drive) {
+      victim.drive.scaleSpeed(it.hitSlowFactor);
+      victim.drive.kickYaw(this.rng.range(-0.35, 0.35), TUNING.physicsWorld.timestepSec);
+    }
     this.bus.emit("kart:hit", { kartId: victim.id, byKartId, shellKind });
   }
 
@@ -734,6 +753,8 @@ export class RaceController {
     if (this.hasStatus(victim, "star")) return; // star invincibility absorbs the ram
     victim.state.speed = it.bulletBillKnockback; // -12 m/s → reverse
     victim.state.statusEffects.push({ kind: "hit", remaining: it.hitDurationSec });
+    // Physics rewrite — same as applyHitEffect: make the knockback physically real.
+    victim.drive?.setSpeed(it.bulletBillKnockback);
     this.bus.emit("kart:hit", { kartId: victim.id, byKartId });
   }
 

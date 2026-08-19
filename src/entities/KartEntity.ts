@@ -16,6 +16,25 @@ import type { KartState, PhysicsProfile } from "./KartPhysics.js";
 import { NO_DRIFT } from "./DriftController.js";
 import { initialLapState } from "../tracks/LapTracker.js";
 
+/**
+ * Physics rewrite — opaque per-kart rigid-body drive handle. The concrete class lives in
+ * src/entities/KartBody.ts (Babylon/Havok); this structural interface keeps the race
+ * controller core/Babylon-free. Null in headless tests → the legacy kinematic path runs
+ * unchanged, so the determinism gate and unit tests are unaffected.
+ */
+export interface IKartDrive {
+  /** Body → state: read pos/heading/speed/vy from the rigid body BEFORE the brain step. */
+  sync(k: KartEntity): void;
+  /** Brain target → body: apply drive force + yaw rate AFTER `k.state = next`. */
+  apply(next: KartState, dt: number): void;
+  /** Scale forward speed in place (impulse). Lateral velocity is preserved. */
+  scaleSpeed(factor: number): void;
+  /** Set forward speed directly (impulse) — e.g. bullet-bill snap to 45 m/s. */
+  setSpeed(speed: number): void;
+  /** One-frame yaw nudge (rad) — makes a shell-hit heading kick physically real. */
+  kickYaw(deltaRad: number, dt: number): void;
+}
+
 export interface KartEntity {
   readonly id: string;
   readonly name: string;
@@ -42,6 +61,11 @@ export interface KartEntity {
    * ONLY inside the controller's update.
    */
   lastOilPatchId: number | null;
+  /**
+   * Physics rewrite — the kart's rigid-body drive (set by the scene on enter, cleared on
+   * exit). Undefined/null → legacy kinematic integration in stepKart is authoritative.
+   */
+  drive?: IKartDrive | null;
 }
 
 export interface CreateKartOpts {

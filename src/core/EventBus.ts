@@ -18,6 +18,9 @@ export interface GameEvents {
   // Phase 7 adds the "start" tier (perfect-start boost) alongside drift/shroom tiers.
   "kart:boosted": { kartId: string; tier: "mini" | "super" | "shroom" | "start" };
   "kart:skid": { kartId: string; cause: "banana" | "oilSlick" };
+  // Physics rewrite — rigid-body kart↔kart bump registered (impulse above threshold,
+  // per-pair cooldown applied by the emitter). Only emitted when the PLAYER is involved.
+  "kart:bumped": { kartId: string; otherKartId: string; impulse: number };
   "ui:navigate": { to: GameScreenId };
 }
 

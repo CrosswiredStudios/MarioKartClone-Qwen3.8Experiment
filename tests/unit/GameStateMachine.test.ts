@@ -19,7 +19,7 @@ function makeFakeScreen(id: GameScreenId): FakeScreen {
   return { id, enter: vi.fn(), exit: vi.fn() };
 }
 
-const ctx: GameContext = { engine: null, scene: null, eventBus: new EventBus<GameEvents>(), raceConfig: null, pendingSelection: {}, input: {} as never, freeDriveMode: false, renderPipeline: null, particleVfx: null, qualityProbe: null };
+const ctx: GameContext = { engine: null, scene: null, eventBus: new EventBus<GameEvents>(), raceConfig: null, pendingSelection: {}, input: {} as never, freeDriveMode: false, renderPipeline: null, particleVfx: null, qualityProbe: null, physicsWorld: null };
 
 /** Registers every screen as a fake and returns the machine + screens map. */
 function makeMachine(initial: GameScreenId) {

@@ -1,8 +1,20 @@
-import { Engine, Scene, UniversalCamera, Vector3, Viewport } from "@babylonjs/core";
+import {
+  Engine,
+  PhysicsBody,
+  PhysicsMotionType,
+  PhysicsShape,
+  PhysicsShapeType,
+  Scene,
+  TransformNode,
+  UniversalCamera,
+  Vector3,
+  Viewport,
+} from "@babylonjs/core";
 import { GameApp } from "./core/GameApp.js";
 import { QualityManager } from "./rendering/QualityManager.js";
 import { RenderPipelineSetup } from "./rendering/RenderPipelineSetup.js";
 import { ParticleFactory } from "./vfx/ParticleFactory.js";
+import { PhysicsWorld } from "./scene/PhysicsWorld.js";
 
 /**
  * Phase 1 bootstrap: engine + scene + GameApp (menu-driven state machine).
@@ -76,6 +88,15 @@ app.setParticleVfx(particleVfx);
 // torch lights) without importing QualityManager — core stays Babylon-free.
 app.setQualityProbe(quality);
 
+// Physics rewrite: the Havok world owns plugin lifecycle + the static terrain body.
+// init() loads the WASM natively under Vite and enables physics on the scene; the
+// Scene auto-steps it every render frame thereafter. Awaited here (top-level) so any
+// race scene can build its terrain heightfield before karts spawn — the 3 s countdown
+// hides the load, which is a few hundred KB served locally by Vite.
+const physicsWorld = new PhysicsWorld(scene);
+await physicsWorld.init();
+app.setPhysicsWorld(physicsWorld);
+
 // Phase 4 Step 10: wire the render-layer QualityManager into the settings panel so
 // quality changes apply live. The reader lets the panel highlight the active preset.
 // Phase 6: a live change also re-applies the post stack + shadow resolution in place.
@@ -123,8 +144,124 @@ declare global {
       aiDrivePlayer?(): void;
       /** Present only when debugAllowed — force the player's held item (e2e / playtest). */
       setItem?(item: string): void;
+      /** Present only when debugAllowed — count of kart:bumped events since load. */
+      bumps?(): number;
+      /**
+       * Present only when debugAllowed (Phase 1 blocker probe) — spawns two dynamic
+       * spheres aimed head-on and watches the WORLD-level collision observable.
+       * Returns { count(), dispose() }; count() = raw native events observed so far.
+       */
+      probeCollision?(): { count(): number; dispose(): void };
+      /**
+       * Present only when debugAllowed (heightfield layout experiment) — 2×2 field with
+       * one tall cell + four spheres at (±3, ±3). read() returns each sphere's Y.
+       */
+      hfProbe?(): { read(): Array<number | null>; dispose(): void };
+      /**
+       * Present only when debugAllowed — raycast straight down in the LIVE physics world.
+       * Returns the hit Y (or null) so probes can compare the physical surface against
+       * field.heightAt ground truth during a real race.
+       */
+      physRayDown?(x: number, z: number): number | null;
+      /** Present only when debugAllowed — raw field.heightAt ground truth (NaN pre-race). */
+      fieldHeightAt?(x: number, z: number): number;
     };
   }
+}
+
+// Debug-only bump counter (physics rewrite) — proves the collision-event path fires.
+let bumpCount = 0;
+if (debugAllowed) app.eventBus.on("kart:bumped", () => { bumpCount++; });
+
+/**
+ * Debug-only heightfield layout experiment: builds a 2×2 field with ONE tall cell
+ * (data [10, 0, 0, 0]) at the origin and drops four spheres at (±3, ±3). Which sphere
+ * lands on top pins down both the buffer→world mapping AND the anchor convention.
+ */
+function makeHeightfieldProbe() {
+  const data = new Float32Array([10, 0, 0, 0]);
+  const node = new TransformNode("hf-probe", scene);
+  node.position.set(0, 0, 0);
+  const body = new PhysicsBody(node, PhysicsMotionType.STATIC, true, scene);
+  body.shape = new PhysicsShape(
+    {
+      type: PhysicsShapeType.HEIGHTFIELD,
+      parameters: {
+        numHeightFieldSamplesX: 2,
+        numHeightFieldSamplesZ: 2,
+        heightFieldSizeX: 10,
+        heightFieldSizeZ: 10,
+        heightFieldData: data,
+      },
+    },
+    scene,
+  );
+  const spots: Array<[string, number, number]> = [
+    ["hf-probe-a", -3, -3],
+    ["hf-probe-b", 3, -3],
+    ["hf-probe-c", -3, 3],
+    ["hf-probe-d", 3, 3],
+  ];
+  const spheres = spots.map(([name, x, z]) => {
+    const n = new TransformNode(name, scene);
+    n.position.set(x, 14, z);
+    const b = new PhysicsBody(n, PhysicsMotionType.DYNAMIC, false, scene);
+    b.shape = new PhysicsShape({ type: PhysicsShapeType.SPHERE, parameters: { radius: 1 } }, scene);
+    return n;
+  });
+  return {
+    read() {
+      return spots.map(([name]) => {
+        const n = scene.getTransformNodeByName(name);
+        return n ? +n.position.y.toFixed(2) : null;
+      });
+    },
+    dispose() {
+      body.dispose();
+      node.dispose();
+      for (const s of spheres) {
+        // PhysicsBody is attached to the node; disposing the node disposes the body.
+        s.dispose();
+      }
+    },
+  };
+}
+
+/**
+ * Phase 1 blocker probe: two fresh dynamic spheres, head-on at ±20 m/s, callbacks
+ * enabled on BOTH bodies, world-level observable tapped. If native Havok events work
+ * AT ALL in this pairing, this fires within a second or two — independent of karts.
+ */
+function makeProbeCollision() {
+  const engine = scene.getPhysicsEngine();
+  if (!engine) throw new Error("physics not enabled");
+  const plugin = engine.getPhysicsPlugin();
+  let events = 0;
+  const obs = (plugin as unknown as { onCollisionObservable: { add(cb: () => void): { remove(): void } } }).onCollisionObservable.add(
+    () => { events++; },
+  );
+  const mk = (name: string, x: number, vx: number) => {
+    const node = new TransformNode(name, scene);
+    node.position.set(x, 5, 0);
+    const body = new PhysicsBody(node, PhysicsMotionType.DYNAMIC, false, scene);
+    body.shape = new PhysicsShape({ type: PhysicsShapeType.SPHERE, parameters: { radius: 1 } }, scene);
+    body.setMassProperties({ ...body.computeMassProperties(), mass: 50 });
+    body.setCollisionCallbackEnabled(true);
+    body.setLinearVelocity(new Vector3(vx, 0, 0));
+    return { node, body };
+  };
+  const a = mk("probe-sphere-a", -6, 20);
+  const b = mk("probe-sphere-b", 6, -20);
+  return {
+    count: () => events,
+    dispose() {
+      obs.remove();
+      a.body.dispose();
+      b.body.dispose();
+      a.node.dispose();
+      b.node.dispose();
+    },
+  };
 }
 
 window.__game = {
@@ -139,7 +276,18 @@ window.__game = {
   racePhase: () => app.racePhase(),
   shells: () => app.shellCount(),
   ...(debugAllowed
-    ? { aiDrivePlayer: () => app.aiDrivePlayer(), setItem: (item: string) => app.debugSetPlayerItem(item) }
+    ? {
+        aiDrivePlayer: () => app.aiDrivePlayer(),
+        setItem: (item: string) => app.debugSetPlayerItem(item),
+        bumps: () => bumpCount,
+        probeCollision: makeProbeCollision,
+        hfProbe: makeHeightfieldProbe,
+        physRayDown: (x: number, z: number) => {
+          const hit = physicsWorld.raycast({ x, y: 60, z }, { x, y: -80, z });
+          return hit ? +hit.point.y.toFixed(3) : null;
+        },
+        fieldHeightAt: (x: number, z: number) => app.fieldHeightAt(x, z),
+      }
     : {}),
 };
 

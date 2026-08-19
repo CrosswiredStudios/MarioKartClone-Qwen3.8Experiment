@@ -21,6 +21,7 @@ import type { VehicleType } from "../entities/vehicleModels.js";
 import { LAGOON_TRACK, MEADOWS_TRACK } from "../data/tracks/index.js";
 import { TUNING } from "../data/tuning.js";
 import { createKart, type KartEntity } from "../entities/KartEntity.js";
+import { KartBody } from "../entities/KartBody.js";
 import { PlayerController } from "../entities/PlayerController.js";
 import { stepKart, type DriveInput, type SurfaceKind } from "../entities/KartPhysics.js";
 import { updateDrift } from "../entities/DriftController.js";
@@ -53,6 +54,8 @@ export class FreeDriveScene implements IGameScreen, IDrivableScreen {
   private props: PropBuilder | null = null;
   private spline: TrackSpline | null = null;
   private player: KartEntity | null = null;
+  /** Physics rewrite — the player's rigid body (null in headless / no-physics mode). */
+  private playerBody: KartBody | null = null;
   private controller: PlayerController | null = null;
   private chaseCam: ChaseCamera | null = null;
   private playerRenderer: KartRenderer | null = null;
@@ -83,6 +86,9 @@ export class FreeDriveScene implements IGameScreen, IDrivableScreen {
     this.track = new TrackBuilder(scene, this.spline, def);
     this.track.build();
 
+    // Physics rewrite — static terrain heightfield body (null physics world → skipped).
+    this.ctx.physicsWorld?.buildTerrain(this.track.field);
+
     // Phase 6: themed props (density-scaled; torch lights at High). Parented under
     // track-root so the shadow-caster sweep sees them; null probe (headless) → skipped.
     if (this.ctx.qualityProbe) {
@@ -104,6 +110,12 @@ export class FreeDriveScene implements IGameScreen, IDrivableScreen {
       heading: gridHeading(this.spline, 0),
       profile,
     });
+
+    // Physics rewrite — rigid body for the player kart (null physics world → kinematic).
+    if (this.ctx.physicsWorld) {
+      this.playerBody = new KartBody(scene, this.player);
+      this.player.drive = this.playerBody;
+    }
 
     // Player kart visual — vehicle type from the race config (parked AI karts
     // default to the neutral kart; they're static this phase).
@@ -179,7 +191,13 @@ export class FreeDriveScene implements IGameScreen, IDrivableScreen {
     // Physics step (pure) — terrain glues the kart to the surface + slope model.
     const field = this.track?.field;
     if (!field) return;
-    player.state = stepKart(player.state, input, surface, dt, 1, 1, field);
+
+    // Physics rewrite — body owns position/vertical when attached: sync() reads its real
+    // state in first, and the brain runs WITHOUT terrain (Havok replaces glue/slope).
+    player.drive?.sync(player);
+    const next = stepKart(player.state, input, surface, dt, 1, 1, player.drive ? undefined : field);
+    player.state = next;
+    player.drive?.apply(next, dt);
   }
 
   /** Called once per render frame by GameApp for camera/render updates. */
@@ -241,6 +259,13 @@ export class FreeDriveScene implements IGameScreen, IDrivableScreen {
     if (this.prevActiveCamera) scene.activeCamera = this.prevActiveCamera;
     // Props BEFORE track: TransformNode.dispose(true) does not recurse into children,
     // so prop instances/sources must be torn down explicitly first.
+    // Physics rewrite — dispose the player's rigid body + static terrain (order: bodies
+    // before the engine still lives; clearTerrain just drops the heightfield body).
+    if (this.player) this.player.drive = null;
+    this.playerBody?.dispose();
+    this.playerBody = null;
+    this.ctx.physicsWorld?.clearTerrain();
+
     this.props?.dispose();
     this.track?.dispose();
     this.props = null;

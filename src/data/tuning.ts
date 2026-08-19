@@ -14,6 +14,39 @@ export const TUNING = {
     onRoadMargin: 0.5, // meters of grace beyond roadWidth/2 before "offRoad" (Phase 3)
     dragCoef: 0.6, // terminal-speed drag coefficient per second (Phase 3)
   },
+  // Havok rigid-body world (physics rewrite). The kinematic stepKart curves above are
+  // still the source of truth for feel — KartBody converts them into forces/impulses on
+  // a real body. Terrain is ONE static heightfield body sampled from the pure HeightField,
+  // so the physical surface matches the rendered ground exactly.
+  physicsWorld: {
+    gravityY: -9.81, // m/s² — scene-level Havok gravity
+    timestepSec: 1 / 60, // fixed plugin step; Scene auto-steps each render frame
+    kartMassKg: 120, // per-kart rigid body mass (bumping momentum scales with this)
+    kartRestitution: 0.35, // bounciness of kart↔kart and kart↔terrain contacts
+    kartFriction: 0.6, // contact friction (driving grip comes from the drive force, not this)
+    linearDamping: 0.1, // velocity bleed per second — keeps off-road roll-outs from coasting forever
+    angularDamping: 0.4, // yaw/pitch/roll bleed per second — settles bumps without killing steer response
+    lateralGripRate: 12, // tire grip: sideways slip is scrubbed at this rate (1/s). High = tires
+      // lock to the heading (kart feel); low = body keeps old momentum while turning (boat drift)
+    // Drive authority (hybrid model): the brain (stepKart) computes a target speed each
+    // step; KartBody chases it with at most this much acceleration. Normal accel (12 m/s²)
+    // and braking (25 m/s²) fit well inside, so the kinematic curves are reproduced — but
+    // after a bump steals forward velocity the engine takes ~0.3–1 s to recover instead of
+    // snapping back in one frame (arcade "shoved" feel). Boost jumps (→40+ m/s) chase fast.
+    maxDriveAccelMps2: 40,
+    // Kart collision shape (capsule along the kart's long axis).
+    capsuleRadiusM: 0.55,
+    capsuleHalfLengthM: 0.9, // pointA→pointB half-extent; total length ≈ radius*2 + halfLength*2
+    centerHeightM: 0.6, // body pivot height above the terrain surface at rest
+    // Virtual suspension (KartRenderer raycasts). Ray origin sits this far below the
+    // kart pivot; max stretch before the wheel is considered "off the ground".
+    suspRayLengthM: 1.2,
+    suspRestHeightM: 0.55, // target wheel travel for render smoothing
+    // Bump detection (kart↔kart collision events → shake/SFX). Impulse magnitude in
+    // kg·m/s above which the hit registers; per-pair cooldown avoids event spam.
+    bumpImpulseThreshold: 40,
+    bumpCooldownSec: 0.5,
+  },
   drift: { charge1Time: 0.6, charge2Time: 1.4, miniBoostSpeed: 38, superBoostSpeed: 46, boostDuration: 0.8 },
   // Chase camera (Phase 3 Task 6). dist/height/fov lerp with speedRatio; smoothing is the
   // exponential-follow rate (higher = snappier). See KartRenderer / FreeDriveScene.
@@ -62,7 +95,14 @@ export const TUNING = {
     bulletBillKnockback: -12, // victim speed (m/s) on a bullet-bill hit
   },
   // Camera shake envelope (Phase 5). Amplitudes in meters; decay/freq shape the sine.
-  shake: { hitMeters: 0.25, boostMeters: 0.1, lightningMeters: 0.35, decayPerSec: 4, freqHz: 9 },
+  shake: {
+    hitMeters: 0.25,
+    boostMeters: 0.1,
+    lightningMeters: 0.35,
+    bumpMeters: 0.15, // kart↔kart rigid-body bump (physics rewrite) — softer than a shell hit
+    decayPerSec: 4,
+    freqHz: 9,
+  },
   ai: { rubberBandFactor: 0.06, speedVariance: 0.08, waypointLookahead: 12 },
   // Race loop (Phase 4). countdownSeconds = 3-2-1-GO at 1 s intervals; standings are
   // recomputed once per second (not per frame) to avoid float-noise rank flicker.

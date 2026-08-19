@@ -23,7 +23,7 @@
 import type { EventBus, GameEvents } from "../core/EventBus.js";
 import { TUNING } from "../data/tuning.js";
 
-export type ShakeSeverity = "hit" | "boost" | "lightning";
+export type ShakeSeverity = "hit" | "boost" | "lightning" | "bump";
 
 /** Amplitude (meters) for a severity, straight from the tuning table. */
 function amplitudeFor(severity: ShakeSeverity): number {
@@ -35,6 +35,8 @@ function amplitudeFor(severity: ShakeSeverity): number {
       return s.boostMeters;
     case "lightning":
       return s.lightningMeters;
+    case "bump":
+      return s.bumpMeters;
   }
 }
 
@@ -79,6 +81,10 @@ export class ScreenShake {
       bus.on("item:used", (p) => {
         // Lightning shakes hardest; only when the PLAYER casts it.
         if (p.kartId === "player" && p.item === "lightning") this.trigger("lightning");
+      }),
+      bus.on("kart:bumped", (p) => {
+        // Emitter already filters to player-involved bumps + per-pair cooldown.
+        if (p.kartId === "player") this.trigger("bump");
       }),
     );
   }
