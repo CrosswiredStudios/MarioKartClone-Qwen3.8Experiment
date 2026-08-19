@@ -485,6 +485,10 @@ export class GameApp {
     // keeps racing and the field finishes out. The transition table allows Racing → Results.
     this.eventBus.on("race:playerFinished", () => {
       if (this.ctx.freeDriveMode) return;
+      // The player is done — fade the engine hum out so it doesn't carry onto the
+      // scoreboard. stopEngineLoop is idempotent, so the race:finished backstop below
+      // and the Results-exit call are safe no-ops after this.
+      this.sfx.stopEngineLoop(0.6);
       if (this.machine.currentId === "Racing" && this.machine.canTransition("Results")) {
         this.machine.transition("Results");
       }
@@ -496,6 +500,9 @@ export class GameApp {
     this.eventBus.on("race:finished", () => {
       if (this.ctx.freeDriveMode) return;
       const standings = this.race?.finalStandings() ?? [];
+      // Backstop: if the player never crossed (DNF / grace deadline), race:playerFinished
+      // didn't fire — fade the hum out here instead. No-op if already stopped.
+      this.sfx.stopEngineLoop(0.6);
       // Phase 6 (T16): the podium animates over the live race world; the fanfare fires
       // mid step-up bounce, not here.
       this.raceScene?.beginPodium(standings, () => this.music.playTheme("fanfare"));

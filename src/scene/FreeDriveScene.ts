@@ -16,7 +16,8 @@ import { Vector3 } from "@babylonjs/core";
 import type { RaceConfig } from "../core/RaceConfig.js";
 import type { GameContext, IGameScreen, IDrivableScreen, DriveSnapshot } from "../core/GameStateMachine.js";
 import { CHARACTER_ROSTER } from "../data/characters.js";
-import { combinedStats } from "../data/vehicles.js";
+import { VEHICLE_ROSTER, combinedStats } from "../data/vehicles.js";
+import type { VehicleType } from "../entities/vehicleModels.js";
 import { LAGOON_TRACK, MEADOWS_TRACK } from "../data/tracks/index.js";
 import { TUNING } from "../data/tuning.js";
 import { createKart, type KartEntity } from "../entities/KartEntity.js";
@@ -89,10 +90,6 @@ export class FreeDriveScene implements IGameScreen, IDrivableScreen {
       this.props.build();
     }
 
-    // Phase 6: point the shadow generator at the freshly-built track + prop meshes (no-op
-    // when shadows are off). Runs on every enter so pause/resume re-points it.
-    this.ctx.renderPipeline?.refreshShadowCasters();
-
     // Karts: player in slot 1, the other three roster characters parked behind.
     const stats = combinedStats(this.raceConfig.characterId, this.raceConfig.vehicleId);
     const profile = { topSpeedStat: stats.topSpeed, accelStat: stats.accel };
@@ -108,8 +105,10 @@ export class FreeDriveScene implements IGameScreen, IDrivableScreen {
       profile,
     });
 
-    // Player kart visual (PBR body tinted by character color).
-    this.playerRenderer = new KartRenderer(scene, me.color, "player-kart");
+    // Player kart visual — vehicle type from the race config (parked AI karts
+    // default to the neutral kart; they're static this phase).
+    const playerVehicleType: VehicleType = VEHICLE_ROSTER.find((v) => v.id === this.raceConfig.vehicleId)?.type ?? "kart";
+    this.playerRenderer = new KartRenderer(scene, me.color, "player-kart", playerVehicleType);
 
     // Parked AI karts + their visuals (static this phase; IAiStrategy lands in Phase 4).
     const others = CHARACTER_ROSTER.filter((c) => c.id !== this.raceConfig.characterId).slice(0, 3);
@@ -127,6 +126,12 @@ export class FreeDriveScene implements IGameScreen, IDrivableScreen {
       r.update(aiState.state, { throttle: 0, steer: 0, drifting: false, useItem: false, itemHeld: false }, 0);
       this.aiRenderers.push(r);
     }
+
+    // Phase 6: point the shadow generator at the freshly-built track + prop meshes AND
+    // the kart roots (no-op when shadows are off). Runs on every enter so pause/resume
+    // re-points it.
+    const kartRoots = [this.playerRenderer.root, ...this.aiRenderers.map((r) => r.root)];
+    this.ctx.renderPipeline?.refreshShadowCasters(kartRoots);
 
     // Skid marks + chase camera (Task 6). No attachControl — mouse must not fight the kart.
     this.skids = new SkidMarks(scene);

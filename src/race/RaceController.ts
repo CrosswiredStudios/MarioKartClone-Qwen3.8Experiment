@@ -33,7 +33,7 @@ import { makeShell, stepShell, type ShellState } from "../items/ShellProjectile.
 import { ItemBoxSpawner, type ItemBox } from "../items/ItemBoxSpawner.js";
 
 /** Fixed AI vehicle table (06-phase-4 Step 2). Content, not tuning. */
-const AI_VEHICLE_TABLE: Readonly<Record<string, string>> = {
+export const AI_VEHICLE_TABLE: Readonly<Record<string, string>> = {
   louie: "zippy",
   pearl: "basher",
   terry: "quadzilla",

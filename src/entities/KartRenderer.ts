@@ -1,11 +1,13 @@
 /**
- * KartRenderer — builds a stylized low-poly kart from primitives and drives it
- * each frame from pure physics state (05-phase-3-track-system.md, Task 6).
+ * KartRenderer — builds a stylized low-poly vehicle (kart / bike / ATV, see
+ * vehicleModels.ts) and drives it each frame from pure physics state
+ * (05-phase-3-track-system.md, Task 6).
  *
- * Adapted from HelloWorldScene's construction: body box (PBR albedo tinted by the
- * character color), seat box, and four cylinder wheels. Wheels use a two-level
- * pivot per wheel — an outer yaw node (front pair steers) wrapping an inner spin
- * node (rolls about the axle) — so steering and rolling never fight over one Euler.
+ * Wheels use a two-level pivot per wheel — an outer yaw node (front pair steers)
+ * wrapping an inner spin node (rolls about the axle) — so steering and rolling
+ * never fight over one Euler. The vehicle type comes from RaceConfig.vehicleId
+ * (plumbed by the scenes); all three types share the same wheel layout so the
+ * tire-based slope sampling below stays identical.
  *
  * AS-BUILT DEVIATION (documented): the doc's prose signature is `update(state)` but
  * it also requires "steer input" for front-wheel yaw and throttle-based body pitch,
@@ -16,8 +18,9 @@
  * This file MAY import Babylon (render layer). No simulation math here.
  */
 
-import { MeshBuilder, PBRMaterial, StandardMaterial, TransformNode, type Scene } from "@babylonjs/core";
+import { MeshBuilder, StandardMaterial, TransformNode, type Mesh, type PBRMaterial, type Scene } from "@babylonjs/core";
 import type { DriveInput, KartState, TerrainSampler } from "./KartPhysics.js";
+import { buildVehicleModel, type VehicleType } from "./vehicleModels.js";
 
 /** Wheel radius in meters — matches the 0.7-diameter cylinders below. */
 const WHEEL_RADIUS = 0.35;
@@ -62,6 +65,10 @@ export class KartRenderer {
   private frontYaw = 0;
   private starOn = false;
   private starClock = 0;
+  /** Throttle-driven exhaust flame (cone at the exhaust anchor). */
+  private readonly exhaustFlame: Mesh;
+  private readonly exhaustMat: StandardMaterial;
+  private exhaustClock = 0;
   /** Hit-flash remaining seconds (Phase 5): body emissive white → black over HIT_FLASH_SEC. */
   private hitFlashRemaining = 0;
   /** Slope orientation (pitch/roll from tire heights) between root and body/wheels. */
@@ -72,7 +79,7 @@ export class KartRenderer {
   private slopePitch = 0;
   private slopeRoll = 0;
 
-  constructor(scene: Scene, color: [number, number, number], name = "kart") {
+  constructor(scene: Scene, color: [number, number, number], name = "kart", vehicleType: VehicleType = "kart") {
     this.root = new TransformNode(`${name}-root`, scene);
 
     // Tilt node carries the slope orientation (pitch/roll from tire heights). It sits
@@ -81,53 +88,32 @@ export class KartRenderer {
     this.tilt = new TransformNode(`${name}-tilt`);
     this.tilt.parent = this.root;
 
-    // Chassis (body + seat) — pitched as a unit so wheels stay level.
-    // TransformNode ctor takes (name, scene?), not a parent node — set .parent after.
-    this.chassis = new TransformNode(`${name}-chassis`);
+    // Per-type model (kart / bike / ATV) — chassis is the pitch unit, wheels carry
+    // the two-level yaw/spin pivots driven in update().
+    const model = buildVehicleModel(scene, vehicleType, color, name);
+    this.chassis = model.chassis;
     this.chassis.parent = this.tilt;
-
-    // MeshBuilder requires a Scene as the parent arg — create in scene, then reparent.
-    const body = MeshBuilder.CreateBox(`${name}-body`, { width: 1.4, height: 0.5, depth: 2.2 }, scene);
-    body.parent = this.chassis;
-    body.position.y = 0.6;
-    this.bodyMat = new PBRMaterial(`${name}-bodymat`, scene);
-    this.bodyMat.albedoColor.set(color[0], color[1], color[2]);
-    this.bodyMat.metallic = 0.2;
-    this.bodyMat.roughness = 0.4;
-    body.material = this.bodyMat;
-
-    const seat = MeshBuilder.CreateBox(`${name}-seat`, { width: 0.8, height: 0.35, depth: 0.9 }, scene);
-    seat.parent = body;
-    seat.position.y = 0.42;
-    const seatMat = new StandardMaterial(`${name}-seatmat`, scene);
-    seatMat.diffuseColor.set(0.15, 0.15, 0.2);
-    seat.material = seatMat;
-
-    // Wheels: [x, z] in kart-local space (z+ is forward). Front pair = positive z.
-    const wheelLayout: Array<{ x: number; z: number; front: boolean }> = [
-      { x: -0.85, z: 0.7, front: true }, // front-left
-      { x: 0.85, z: 0.7, front: true }, // front-right
-      { x: -0.85, z: -0.7, front: false }, // rear-left
-      { x: 0.85, z: -0.7, front: false }, // rear-right
-    ];
-    const wheelMat = new StandardMaterial(`${name}-wheelmat`, scene);
-    wheelMat.diffuseColor.set(0.1, 0.1, 0.12);
-
-    for (const w of wheelLayout) {
-      const yawNode = new TransformNode(`${name}-wyaw-${w.x}-${w.z}`);
-      yawNode.parent = this.tilt;
-      yawNode.position.set(w.x, WHEEL_RADIUS, w.z);
-      const spinNode = new TransformNode(`${name}-wspin-${w.x}-${w.z}`);
-      spinNode.parent = yawNode;
-      // Cylinder axis is Y by default; tip it so the axle runs along X (a rolling wheel).
-      const tire = MeshBuilder.CreateCylinder(`${name}-wheel-${w.x}-${w.z}`, { diameter: WHEEL_RADIUS * 2, height: 0.3 }, scene);
-      tire.parent = spinNode;
-      tire.rotation.z = Math.PI / 2;
-      tire.material = wheelMat;
-
-      this.wheelYawNodes.push(yawNode);
-      this.wheelSpinNodes.push(spinNode);
+    this.bodyMat = model.bodyMat;
+    for (const w of model.wheels) {
+      w.yaw.parent = this.tilt;
+      this.wheelYawNodes.push(w.yaw);
+      this.wheelSpinNodes.push(w.spin);
     }
+
+    // Throttle-driven exhaust flame: a small cone at the exhaust anchor, pointing
+    // rearward (−z). Scale/visibility are driven in update() from input.throttle.
+    // (Boost-event flames are owned by ParticleFactory — this is the idle flame.)
+    this.exhaustMat = new StandardMaterial(`${name}-exhaustmat`, scene);
+    this.exhaustMat.diffuseColor.set(1, 0.55, 0.1);
+    this.exhaustMat.emissiveColor.set(1, 0.5, 0.05);
+    this.exhaustMat.disableLighting = true;
+    // No CreateCone in this Babylon version — a cylinder with diameterTop=0 IS a cone.
+    this.exhaustFlame = MeshBuilder.CreateCylinder(`${name}-exhaustflame`, { diameterTop: 0, diameterBottom: 0.16, height: 0.45, tessellation: 8 }, scene);
+    this.exhaustFlame.parent = model.exhaustAnchor;
+    this.exhaustFlame.rotation.x = -Math.PI / 2; // cone tip (default +y) points rearward (−z)
+    this.exhaustFlame.position.z = -0.22; // extend the flame out behind the anchor
+    this.exhaustFlame.material = this.exhaustMat;
+    this.exhaustFlame.isVisible = false;
   }
 
   /**
@@ -188,6 +174,18 @@ export class KartRenderer {
     else if (input.throttle < -0.1) bodyTargetPitch = PITCH_BRAKE;
     this.pitch += (bodyTargetPitch - this.pitch) * Math.min(1, dt * PITCH_LERP_RATE);
     this.chassis.rotation.x = this.pitch;
+
+    // Exhaust flame: visible while accelerating, length flickers with a fast sine.
+    // A star boost (shroom) makes it longer and hotter.
+    const accelerating = input.throttle > 0.5;
+    this.exhaustFlame.isVisible = accelerating;
+    if (accelerating) {
+      this.exhaustClock += dt;
+      const flicker = 0.8 + 0.25 * Math.sin(this.exhaustClock * 30);
+      const boostScale = this.starOn ? 1.8 : 1;
+      this.exhaustFlame.scaling.set(1, flicker * boostScale, 1);
+      this.exhaustMat.emissiveColor.set(1, this.starOn ? 0.75 : 0.5, this.starOn ? 0.3 : 0.05);
+    }
 
     // Emissive: hit-flash (Phase 5) takes priority over the star flicker placeholder.
     if (this.hitFlashRemaining > 0) {

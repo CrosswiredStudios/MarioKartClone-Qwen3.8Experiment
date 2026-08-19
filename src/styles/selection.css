@@ -134,34 +134,15 @@
   box-shadow: 0 0 6px rgba(255, 210, 63, 0.5);
 }
 
-/* --- Vehicle modifier badges -------------------------------------------- */
+/* --- Vehicle preview canvas ---------------------------------------------- */
 
-.badge-row {
-  display: flex;
-  justify-content: center;
-  gap: 6px;
-  margin-top: 8px;
-  min-height: 20px;
-}
-
-.badge-pos,
-.badge-neg {
-  font-size: 12px;
-  font-weight: 700;
-  padding: 2px 7px;
-  border-radius: 999px;
-}
-
-.badge-pos {
-  background: rgba(84, 200, 110, 0.2);
-  color: #5fd67f;
-  border: 1px solid rgba(84, 200, 110, 0.5);
-}
-
-.badge-neg {
-  background: rgba(230, 90, 70, 0.2);
-  color: #ff8a6b;
-  border: 1px solid rgba(230, 90, 70, 0.5);
+.card-preview {
+  display: block;
+  width: 100%;
+  max-width: 200px;
+  margin: 4px auto 8px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
 }
 
 /* --- Map swatches --------------------------------------------------------- */

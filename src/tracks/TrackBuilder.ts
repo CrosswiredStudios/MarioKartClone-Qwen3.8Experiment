@@ -1,7 +1,7 @@
 /**
  * Builds the drivable world from a TrackDefinition (Babylon side of Phase 3).
  *
- * Pure data in, meshes out: road ribbon + procedural lane texture, edge barriers,
+ * Pure data in, meshes out: road ribbon + procedural lane texture,
  * ground plane, and item-box anchor TransformNodes. Everything is parented under a
  * single root node so FreeDriveScene can dispose the whole track at once.
  *
@@ -26,8 +26,6 @@ import type { TrackSpline } from "./TrackSpline.js";
 
 /** Number of ribbon rings around the loop (≈400 per plan). */
 const ROAD_SAMPLES = 400;
-/** Barriers are placed every ~this many meters of arc length, on both edges. */
-const BARRIER_ARC_SPACING = 4;
 
 export interface SplinePlacement {
   pos: Vector3; // y = 0
@@ -75,7 +73,6 @@ export class TrackBuilder {
   build(): void {
     this.buildGround();
     this.buildRoad();
-    this.buildBarriers();
     this.buildItemBoxAnchors();
   }
 
@@ -142,7 +139,8 @@ export class TrackBuilder {
     const grassTex = new Texture("textures/grass.jpg", this.scene);
     grassTex.wrapU = Texture.WRAP_ADDRESSMODE;
     grassTex.wrapV = Texture.WRAP_ADDRESSMODE;
-    grassTex.anisotropicFiltering = true;
+    // v9: boolean anisotropicFiltering was removed — level 8 ≈ the old `true` (max AF).
+    grassTex.anisotropicFilteringLevel = 8;
     // ~2 m per tile so individual grass blades read at chase-camera distance.
     grassTex.uScale = spanX / 2;
     grassTex.vScale = spanZ / 2;
@@ -234,58 +232,21 @@ export class TrackBuilder {
   private buildRoadMaterial(): StandardMaterial {
     const mat = new StandardMaterial("road-mat", this.scene);
     // Procedural asphalt + lane markings + rumble strips. The texture repeats
-    // along the loop via UV v.
+    // along the loop via UV u (see below).
     const tex = new DynamicTexture("road-tex", { width: 256, height: 128 }, this.scene, false);
     drawLaneTexture(tex.getContext(), this.track.theme.accentColor);
     // CRITICAL: push the canvas content to the GPU. Without update() a fresh
     // DynamicTexture is transparent, so a lit material sampling it renders nothing
     // (this was the "invisible road" bug).
     tex.update();
-    // CreateRibbon maps v across the whole path; scale it so the lane texture
-    // repeats along the loop (same trick as Bousquie's demo: vScale = step count).
-    tex.vScale = ROAD_SAMPLES / 4;
-    mat.diffuseTexture = tex;
-    mat.specularColor = Color3.Black();
-    return mat;
-  }
-
-  private buildBarriers(): void {
-    const count = Math.max(8, Math.floor(this.spline.length / BARRIER_ARC_SPACING));
-    // ONE shared striped material for every post (was: a fresh material per post —
-    // hundreds of identical materials). The stripe texture is tiny and repeats
-    // vertically across each post's V span.
-    const mat = this.buildBarrierMaterial();
-    for (const side of [-1, 1]) {
-      for (let i = 0; i < count; i++) {
-        const t = i / count;
-        // Phase 6: barriers hug the PER-SEGMENT road edge (bridges narrow), and are
-        // taller on widthOverride spans so the bridge reads as an enclosed crossing.
-        const inSpan = this.spline.inWidthOverrideSpan(t);
-        const halfWidth = this.spline.halfWidthAt(t) + 0.4; // just outside the road edge
-        const height = 1.1 + (inSpan ? TUNING.vfx.bridgeBarrierExtraHeightM : 0);
-        const place = placeAlongSpline(this.spline, t, halfWidth * side);
-        const groundY = this.field.heightAt(place.pos.x, place.pos.z);
-        const post = MeshBuilder.CreateBox(`barrier-${side}-${i}`, { width: 0.35, height, depth: 0.35 }, this.scene);
-        post.position.set(place.pos.x, groundY + height / 2, place.pos.z);
-        post.rotation.y = place.rotationY;
-        post.material = mat;
-        post.parent = this.root;
-      }
-    }
-  }
-
-  /** Accent/white vertical stripes — the classic kart-race barrier look. */
-  private buildBarrierMaterial(): StandardMaterial {
-    const mat = new StandardMaterial("barrier-mat", this.scene);
-    const tex = new DynamicTexture("barrier-tex", { width: 16, height: 32 }, this.scene, false);
-    const ctx = tex.getContext();
-    if (ctx) {
-      ctx.fillStyle = "#f2f2f2";
-      ctx.fillRect(0, 0, 16, 32);
-      ctx.fillStyle = this.track.theme.accentColor;
-      ctx.fillRect(0, 0, 16, 16);
-    }
-    tex.update();
+    // CRITICAL: DynamicTexture defaults to CLAMP addressing — without WRAP, uScale > 1
+    // clamps everything past u=1 to the last pixel column instead of tiling.
+    tex.wrapU = Texture.WRAP_ADDRESSMODE;
+    tex.wrapV = Texture.WRAP_ADDRESSMODE;
+    // CreateRibbon maps u ALONG each path (the loop) and v ACROSS the two edge
+    // paths (road width). So repeat along u — one tile ≈ trackLength/100 of
+    // track — and leave v unscaled so the texture spans the road width once.
+    tex.uScale = ROAD_SAMPLES / 4;
     mat.diffuseTexture = tex;
     mat.specularColor = Color3.Black();
     return mat;
@@ -314,12 +275,14 @@ interface LaneCtx {
 
 /**
  * Asphalt with grain, tire-wear bands, rumble strips at the edges, a dashed
- * center line and solid edge lines. 256×128: u spans the road width, v repeats
- * along the loop (vScale = ROAD_SAMPLES/4 → one tile ≈ 100 m of track).
+ * center line and solid edge lines. 256×128: x (u) repeats along the loop
+ * (uScale = ROAD_SAMPLES/4 → one tile ≈ trackLength/100 of track), y (v) spans
+ * the road width exactly once — matching CreateRibbon's UV layout, where u is
+ * distance ALONG each path and v is ACROSS the two edge paths.
  */
 function drawLaneTexture(ctx: LaneCtx, accentHex: string): void {
-  const w = ctx.canvas.width;
-  const h = ctx.canvas.height;
+  const w = ctx.canvas.width; // along the track loop (u)
+  const h = ctx.canvas.height; // across the road width (v)
   // Asphalt base.
   ctx.fillStyle = "#3a3d42";
   ctx.fillRect(0, 0, w, h);
@@ -333,25 +296,25 @@ function drawLaneTexture(ctx: LaneCtx, accentHex: string): void {
   }
   // Tire-wear bands: darker strips where the karts actually drive.
   ctx.fillStyle = "rgba(20,22,26,0.35)";
-  ctx.fillRect(w * 0.28, 0, w * 0.14, h);
-  ctx.fillRect(w * 0.58, 0, w * 0.14, h);
+  ctx.fillRect(0, h * 0.28, w, h * 0.14);
+  ctx.fillRect(0, h * 0.58, w, h * 0.14);
   // Rumble strips: red/white blocks at both edges (the iconic kart look).
-  const rumbleW = 14;
-  const blockH = h / 8;
-  for (let y = 0; y < h; y += blockH) {
-    const even = Math.floor(y / blockH) % 2 === 0;
+  const rumbleH = 7;
+  const blockW = w / 8;
+  for (let x = 0; x < w; x += blockW) {
+    const even = Math.floor(x / blockW) % 2 === 0;
     ctx.fillStyle = even ? "#d23b2f" : "#f2f2f2";
-    ctx.fillRect(0, y, rumbleW, blockH);
-    ctx.fillRect(w - rumbleW, y, rumbleW, blockH);
+    ctx.fillRect(x, 0, blockW, rumbleH);
+    ctx.fillRect(x, h - rumbleH, blockW, rumbleH);
   }
   // Solid edge lines just inside the rumble strips.
   ctx.fillStyle = "#e8e8e8";
-  ctx.fillRect(rumbleW + 4, 0, 5, h);
-  ctx.fillRect(w - rumbleW - 9, 0, 5, h);
+  ctx.fillRect(0, rumbleH + 2, w, 3);
+  ctx.fillRect(0, h - rumbleH - 5, w, 3);
   // Dashed center line.
   ctx.fillStyle = accentHex;
-  const dashH = h / 2;
-  for (let y = 0; y < h; y += dashH * 2) {
-    ctx.fillRect(w / 2 - 4, y + dashH * 0.15, 8, dashH * 0.7);
+  const dashW = w / 2;
+  for (let x = 0; x < w; x += dashW * 2) {
+    ctx.fillRect(x + dashW * 0.15, h / 2 - 3, dashW * 0.7, 6);
   }
 }

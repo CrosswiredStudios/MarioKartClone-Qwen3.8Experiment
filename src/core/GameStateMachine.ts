@@ -16,8 +16,12 @@ export interface IRenderPipeline {
   onQualityChanged(): void;
   /** Restore menu fog/clear color when leaving a map scene (skybox stays as backdrop). */
   exitMap(): void;
-  /** Re-register shadow casters after track/kart meshes are (re)built — pause rebuilds them. */
-  refreshShadowCasters(): void;
+  /**
+   * Re-register shadow casters after track/kart meshes are (re)built — pause rebuilds
+   * them. `extraRoots` are the kart roots (karts aren't under track-root); typed as a
+   * minimal structural shape so core stays Babylon-free.
+   */
+  refreshShadowCasters(extraRoots?: ReadonlyArray<{ getChildMeshes(): unknown[] }>): void;
   /** Full teardown: dispose skybox/lights/shadows/post and restore pristine scene state. */
   dispose(): void;
 }

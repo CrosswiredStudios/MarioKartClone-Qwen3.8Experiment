@@ -1,17 +1,24 @@
 /**
- * Vehicle select — 3-card grid showing per-vehicle modifier badges and the
- * COMBINED stat bars for the currently selected character. Navigation is done
- * ONLY by emitting "ui:navigate" (architecture §5); the chosen id is stashed in
- * ctx.pendingSelection as the selection changes so Back-and-return restores it.
+ * Vehicle select — 3-card grid showing a side-view preview and the COMBINED stat
+ * bars for the currently selected character. Navigation is done ONLY by emitting
+ * "ui:navigate" (architecture §5); the chosen id is stashed in ctx.pendingSelection
+ * as the selection changes so Back-and-return restores it.
  */
 import { CHARACTER_ROSTER } from "../data/characters.js";
 import { VEHICLE_ROSTER, combinedStats } from "../data/vehicles.js";
 import type { GameContext, IGameScreen } from "../core/GameStateMachine.js";
 import { buildSelectionShell, buildStatBar, CardGridController } from "./selectionHelpers.js";
+import { drawVehiclePreview } from "./vehiclePreview.js";
 import "../styles/selection.css";
 
 const MODIFIER_AXES = ["accel", "topSpeed", "handling", "offRoad"] as const;
 const TYPE_LABELS: Record<string, string> = { kart: "Kart", bike: "Bike", atv: "ATV" };
+/** Fixed preview accent per vehicle type (the card is about the VEHICLE, not the character). */
+const PREVIEW_ACCENTS: Record<string, [number, number, number]> = {
+  kart: [0.89, 0.27, 0.27], // red
+  bike: [0.27, 0.56, 0.89], // blue
+  atv: [0.3, 0.69, 0.31], // green
+};
 
 export class VehicleSelect implements IGameScreen {
   readonly id = "VehicleSelect" as const;
@@ -48,18 +55,11 @@ export class VehicleSelect implements IGameScreen {
       typeLabel.className = "card-type";
       typeLabel.textContent = TYPE_LABELS[vehicle.type] ?? vehicle.type;
 
-      // Modifier badges: +1 green / -1 red, hidden when 0.
-      const badges = document.createElement("div");
-      badges.className = "badge-row";
-      for (const axis of MODIFIER_AXES) {
-        const mod = vehicle.modifiers[axis];
-        if (mod === 0) continue;
-        const badge = document.createElement("span");
-        badge.className = mod > 0 ? "badge-pos" : "badge-neg";
-        badge.dataset.testid = `veh-mod-${axis}`;
-        badge.textContent = `${axis} ${mod > 0 ? "+1" : "-1"}`;
-        badges.appendChild(badge);
-      }
+      // Side-view preview of the vehicle (2D canvas silhouette, tinted per type).
+      const preview = document.createElement("canvas");
+      preview.className = "card-preview";
+      preview.dataset.testid = `veh-preview-${vehicle.id}`;
+      drawVehiclePreview(preview, vehicle.type, PREVIEW_ACCENTS[vehicle.type] ?? [0.8, 0.8, 0.85]);
 
       // Combined stat bars for the selected character (same markup as Task 6).
       const combined = combinedStats(character.id, vehicle.id);
@@ -69,7 +69,7 @@ export class VehicleSelect implements IGameScreen {
         stats.appendChild(buildStatBar(axis, combined[axis], "veh"));
       }
 
-      card.append(name, typeLabel, badges, stats);
+      card.append(preview, name, typeLabel, stats);
       shell.grid.appendChild(card);
       cards.push(card);
 

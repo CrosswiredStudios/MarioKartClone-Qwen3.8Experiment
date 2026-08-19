@@ -60,11 +60,11 @@ test.describe("Phase 2 selection screens", () => {
     await expect(page.getByTestId("char-card-terry")).toHaveClass(/selected/);
     await page.getByTestId("char-confirm").click();
 
-    // Vehicle screen: modifier badges only render for non-zero modifiers.
+    // Vehicle screen: each card shows a side-view preview canvas (no modifier chips).
     await expect(page.getByTestId("vehicle-select")).toBeVisible();
-    await expect(page.locator("[data-testid='veh-card-zippy'] [data-testid='veh-mod-accel']")).toHaveText("accel +1");
-    // basher has all-zero modifiers -> no badges rendered.
-    await expect(page.locator("[data-testid='veh-card-basher'] [data-testid^='veh-mod-']")).toHaveCount(0);
+    for (const id of ["basher", "zippy", "quadzilla"]) {
+      await expect(page.locator(`[data-testid='veh-card-${id}'] [data-testid='veh-preview-${id}']`)).toHaveCount(1);
+    }
 
     // Click zippy, confirm -> MapSelect; confirm meadows -> Countdown stub.
     await page.getByTestId("veh-card-zippy").click();

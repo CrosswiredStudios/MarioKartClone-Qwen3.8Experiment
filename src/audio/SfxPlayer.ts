@@ -343,16 +343,29 @@ export class SfxPlayer {
     v.gain.gain.setTargetAtTime(target, now, 0.05);
   }
 
-  /** Stop the engine loop (results screen / quit). */
-  stopEngineLoop(): void {
+  /** Stop the engine loop (results screen / quit). With `fadeSeconds` > 0 the gain
+   * ramps to silence first so the hum doesn't cut off abruptly. Idempotent — a
+   * second call is a no-op because the voice is cleared immediately. */
+  stopEngineLoop(fadeSeconds = 0): void {
     const v = this.engine;
     this.engine = null;
     if (!v) return;
     try {
-      v.osc.stop();
-      v.lfo?.stop();
-      v.gain.disconnect();
-      v.lfo?.disconnect();
+      const now = v.osc.context.currentTime;
+      if (fadeSeconds > 0) {
+        // Ramp to silence, then stop the sources. Nodes are left connected until
+        // they stop so the fade is audible; stopped + unconnected nodes get GC'd.
+        v.gain.gain.cancelScheduledValues(now);
+        v.gain.gain.setTargetAtTime(0, now, fadeSeconds / 3);
+        const stopAt = now + fadeSeconds;
+        v.osc.stop(stopAt);
+        v.lfo?.stop(stopAt);
+      } else {
+        v.osc.stop();
+        v.lfo?.stop();
+        v.gain.disconnect();
+        v.lfo?.disconnect();
+      }
     } catch { /* already stopped */ }
   }
 

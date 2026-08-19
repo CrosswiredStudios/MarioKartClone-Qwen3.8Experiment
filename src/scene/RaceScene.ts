@@ -34,7 +34,9 @@ import { KartRenderer } from "../entities/KartRenderer.js";
 import { PropBuilder } from "../tracks/PropBuilder.js";
 import { TrackBuilder } from "../tracks/TrackBuilder.js";
 import { TrackSpline } from "../tracks/TrackSpline.js";
-import type { RaceController } from "../race/RaceController.js";
+import { AI_VEHICLE_TABLE, type RaceController } from "../race/RaceController.js";
+import { VEHICLE_ROSTER } from "../data/vehicles.js";
+import type { VehicleType } from "../entities/vehicleModels.js";
 import { ScreenShake } from "../vfx/ScreenShake.js";
 import { ChaseCamera } from "./ChaseCamera.js";
 import { ChargeIndicator } from "./ChargeIndicator.js";
@@ -195,7 +197,7 @@ export class RaceScene implements IGameScreen {
     if (this.entered) {
       const def = this.race.config.mapId === LAGOON_TRACK.id ? LAGOON_TRACK : MEADOWS_TRACK;
       this.ctx.renderPipeline?.applyTheme(def.theme);
-      this.ctx.renderPipeline?.refreshShadowCasters();
+      this.ctx.renderPipeline?.refreshShadowCasters([...this.renderers.values()].map((r) => r.root));
       return;
     }
     this.entered = true;
@@ -223,15 +225,22 @@ export class RaceScene implements IGameScreen {
       this.props.build();
     }
 
-    // Phase 6: point the shadow generator at the freshly-built track + prop meshes (pause/
-    // resume rebuilds them, so this runs on every enter — no-op when shadows are off).
-    this.ctx.renderPipeline?.refreshShadowCasters();
-
     // One renderer per kart, driven from the controller's live state each frame.
+    // Vehicle type: the player's comes from the race config; AI karts (id ===
+    // characterId) come from the fixed AI vehicle table.
+    const kartRoots: TransformNode[] = [];
     for (const k of this.race.karts()) {
-      const r = new KartRenderer(scene, k.color, `${k.id}-kart`);
+      const vehicleId = k.isPlayer ? this.race.config.vehicleId : (AI_VEHICLE_TABLE[k.id] ?? "basher");
+      const vehicleType: VehicleType = VEHICLE_ROSTER.find((v) => v.id === vehicleId)?.type ?? "kart";
+      const r = new KartRenderer(scene, k.color, `${k.id}-kart`, vehicleType);
+      kartRoots.push(r.root);
       this.renderers.set(k.id, r);
     }
+
+    // Phase 6: point the shadow generator at the freshly-built track + prop meshes AND
+    // the kart roots (pause/resume rebuilds them, so this runs on every enter — no-op
+    // when shadows are off).
+    this.ctx.renderPipeline?.refreshShadowCasters(kartRoots);
 
     // Phase 5.1 — shell projectiles + charge indicator (render-only mirrors).
     this.shellRenderer = new ShellRenderer(scene);

@@ -135,7 +135,6 @@ export const TUNING = {
     skidDustEmitRatePerSec: 40, // × quality budget() at High
     shellExplosionBurstCount: 60, // particles in the radial burst (× budget)
     confettiBurstCount: 120, // particles per podium burst (× budget)
-    bridgeBarrierExtraHeightM: 0.4, // barriers on widthOverride spans are taller
     bridgeVoidDropM: 3, // cliff void plane sits this far below road level
   },
   // Audio (Phase 6). Synthesized catalog — no asset files.

@@ -50,6 +50,7 @@ import {
   StandardMaterial,
   Texture,
   Vector3,
+  type TransformNode,
 } from "@babylonjs/core";
 import type { TrackTheme } from "../data/tracks/shared.js";
 import type { QualityManager } from "./QualityManager.js";
@@ -127,18 +128,27 @@ export class RenderPipelineSetup {
   }
 
   /**
-   * Re-register shadow casters from the current track-root children. Called by scenes
-   * after (re)building the track + karts — pause/resume rebuilds those meshes, so a
-   * fresh enter() must re-point the generator at the new mesh instances. No-op when
-   * shadows are off (Low preset) or no theme is applied yet.
+   * Re-register shadow casters from the current track-root children plus any extra
+   * roots (kart roots — karts are NOT under track-root). Called by scenes after
+   * (re)building the track + karts — pause/resume rebuilds those meshes, so a fresh
+   * enter() must re-point the generator at the new mesh instances. No-op when shadows
+   * are off (Low preset) or no theme is applied yet.
    */
-  refreshShadowCasters(): void {
+  refreshShadowCasters(extraRoots?: TransformNode[]): void {
     if (!this.shadowGen) return;
     const root = this.scene.getTransformNodeByName("track-root");
     if (!root) return;
     for (const child of root.getChildMeshes()) {
       this.shadowGen.addShadowCaster(child);
       child.receiveShadows = true;
+    }
+    // Extra roots (karts): addShadowCaster only accepts AbstractMesh in this
+    // Babylon version, so register each child mesh individually.
+    for (const extra of extraRoots ?? []) {
+      for (const m of extra.getChildMeshes()) {
+        this.shadowGen.addShadowCaster(m);
+        m.receiveShadows = true;
+      }
     }
   }
 
