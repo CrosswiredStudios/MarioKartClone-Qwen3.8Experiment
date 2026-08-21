@@ -14,10 +14,14 @@
  */
 
 import type { Camera ,
+  Nullable,
+  Observer,
   Scene} from "@babylonjs/core";
 import {
+  BaseTexture,
   Color3,
   MeshBuilder,
+  type PBRMaterial,
   PointLight,
   StandardMaterial,
   TransformNode,
@@ -25,6 +29,7 @@ import {
   Vector3,
   type Mesh,
 } from "@babylonjs/core";
+import { createMatteMaterial, createOilSlickMaterial } from "../rendering/materials.js";
 import type { GameContext, IGameScreen } from "../core/GameStateMachine.js";
 import { LAGOON_TRACK, MEADOWS_TRACK } from "../data/tracks/index.js";
 import { TUNING } from "../data/tuning.js";
@@ -43,6 +48,7 @@ import { ChaseCamera } from "./ChaseCamera.js";
 import { ChargeIndicator } from "./ChargeIndicator.js";
 import { ShellRenderer } from "./ShellRenderer.js";
 import { countdownZoomEase, finishOutEase } from "./cameraEasing.js";
+import { computeWorldReady } from "./worldReady.js";
 
 /** Spin rate (rad/s) for the item-box visuals. */
 const ITEM_BOX_SPIN = 1.6;
@@ -140,6 +146,21 @@ export class RaceScene implements IGameScreen {
   // ── Phase 7 camera modes (in-scene countdown + finish-out wide view) ─────────
   /** True while enter() has built the world — makes re-entry (Countdown → Racing) a no-op. */
   private entered = false;
+
+  // ── Loading screen (world readiness) ─────────────────────────────────────────
+  /** Async textures (grass + skybox) still loading at build time — polled in tick(). */
+  private pendingTextures: BaseTexture[] = [];
+  /** True once at least one frame has rendered after the build (shader compile done). */
+  private frameRendered = false;
+  /** Seconds since the world build (drives the ready-timeout fallback). */
+  private readyClock = 0;
+  /** onAfterRenderObservable observer — removed (deferred) on exit. */
+  private afterRenderObs: Nullable<Observer<Scene>> = null;
+
+  /** True once the world's textures + first frame are done — gates the countdown (GameApp). */
+  get isWorldReady(): boolean {
+    return computeWorldReady(this.pendingTextures, this.frameRendered, this.readyClock, TUNING.race.worldReadyTimeoutSec);
+  }
   /** Current framing mode; initialized from race state on each real enter(). */
   private camMode: RaceCamMode = "countdown";
   /** Countdown wide-view camera position + look target, computed once per enter. */
@@ -165,7 +186,7 @@ export class RaceScene implements IGameScreen {
   /** Phase 6 — glossy oil-slick discs at hazard placements (lagoon only; render mirrors logic). */
   private oilSlickMeshes: Mesh[] = [];
   /** Shared material for all slick discs (one dispose on exit). */
-  private oilSlickMat: StandardMaterial | null = null;
+  private oilSlickMat: PBRMaterial | null = null;
   /** Phase 5.1 — shell projectile mesh pool (render mirrors logic-owned shells). */
   private shellRenderer: ShellRenderer | null = null;
   /** Phase 5.1 — "item loaded on kart" billboard while the player charges. */
@@ -244,7 +265,7 @@ export class RaceScene implements IGameScreen {
 
       // Physics rewrite — rigid body per kart (null physics world → kinematic fallback).
       if (this.ctx.physicsWorld) {
-        const b = new KartBody(scene, k);
+        const b = new KartBody(scene, k, this.track.field);
         k.drive = b;
         this.bodies.set(k.id, b);
         // Bump feedback is player-centric: only the player's body reports bumps.
@@ -290,9 +311,11 @@ export class RaceScene implements IGameScreen {
       node.position.set(box.pos.x, field.heightAt(box.pos.x, box.pos.z) + TUNING.terrain.roadYOffset + 0.55, box.pos.z);
       const cube = MeshBuilder.CreateBox(`itembox-cube-${box.id}`, { size: 0.7 }, scene);
       cube.parent = node;
-      const mat = new StandardMaterial(`itembox-mat-${box.id}`, scene);
-      mat.diffuseColor.set(1, 0.85, 0.2);
-      mat.emissiveColor.set(0.35, 0.28, 0.05);
+      // PBR gold with a warm emissive so the box reads as glowing even in shadow.
+      const mat = createMatteMaterial(scene, `itembox-mat-${box.id}`, new Color3(1, 0.85, 0.2), {
+        roughness: 0.4,
+        emissive: new Color3(0.35, 0.28, 0.05),
+      });
       cube.material = mat;
       this.itemBoxMeshes.push(node);
     }
@@ -300,10 +323,9 @@ export class RaceScene implements IGameScreen {
     // Phase 6 (T15): oil slicks render as dark glossy discs at the SAME world positions the
     // logic uses (pointAt(t) + left-normal × lateralOffset), so a rendered slick is exactly
     // where gameplay triggers the skid. Sits just above the road ribbon to avoid z-fighting.
-    const slickMat = new StandardMaterial("oil-slick-mat", scene);
-    slickMat.diffuseColor.set(0.03, 0.03, 0.05); // near-black
-    slickMat.specularColor.set(0.9, 0.9, 1.0); // high specular → glossy wet sheen
-    slickMat.emissiveColor.set(0.04, 0.03, 0.08); // faint purple sheen (oil rainbow hint)
+    // PBR wet-sheen: low roughness + dark cool albedo gives the glossy "wet" look
+    // via sun/IBL reflections — replacing the old specular+emissive hack.
+    const slickMat = createOilSlickMaterial(scene, "oil-slick-mat");
     this.oilSlickMat = slickMat;
     for (const h of def.hazards) {
       if (h.kind !== "oilSlick") continue;
@@ -359,6 +381,17 @@ export class RaceScene implements IGameScreen {
         }
       }),
     );
+
+    // Loading screen — snapshot the async textures still loading after the build (grass +
+    // skybox; DynamicTextures are ready immediately and drop out of the filter) and watch
+    // for the first rendered frame (first-frame shader compile is the other hitch). The
+    // countdown is gated on isWorldReady (GameApp) so the player never sees a frozen "3".
+    this.pendingTextures = scene.textures.filter((t) => !t.isReady());
+    this.frameRendered = false;
+    this.readyClock = 0;
+    this.afterRenderObs = scene.onAfterRenderObservable.add(() => {
+      this.frameRendered = true;
+    });
 
     // Phase 7 — initialize the camera mode from live race state (a re-built scene for a
     // new race always starts in countdown; the wide framing is computed below).
@@ -430,6 +463,9 @@ export class RaceScene implements IGameScreen {
    * active screen is Results and onFrame no longer runs for this scene.
    */
   tick(dt: number): void {
+    // Loading screen — advance the ready clock while the world is still loading.
+    if (!this.isWorldReady) this.readyClock += dt;
+
     const terrain = this.track?.field;
     for (const k of this.race.karts()) {
       const r = this.renderers.get(k.id);
@@ -449,8 +485,11 @@ export class RaceScene implements IGameScreen {
       const kartPos = new Vector3(s.pos.x, camY, s.pos.z);
 
       if (this.camMode === "countdown") {
-        // Wide grid view easing into the chase framing over the 3 s count.
-        this.countdownClock += dt;
+        // Wide grid view easing into the chase framing over the 3 s count. The clock only
+        // advances once the world is ready (loading screen up) — otherwise the zoom would
+        // be consumed while the player is still on the loading screen and the countdown
+        // would start already framed in chase.
+        if (this.isWorldReady) this.countdownClock += dt;
         const e = countdownZoomEase(this.countdownClock / TUNING.race.countdownSeconds);
         const c = TUNING.camera;
         const dist = lerp(c.distMin, c.distMax, s.speedRatio);
@@ -578,6 +617,14 @@ export class RaceScene implements IGameScreen {
     this.chaseCam = null;
     this.track = null;
     this.spline = null;
+    // Loading screen — drop the texture snapshot + render observer. Observer has no
+    // dispose() — remove(true) defers the removal so it's safe even mid-frame (same
+    // pattern as QualityManager.detectObserver).
+    this.afterRenderObs?.remove(true);
+    this.afterRenderObs = null;
+    this.pendingTextures = [];
+    this.frameRendered = false;
+    this.readyClock = 0;
     // Phase 7 — reset camera-mode state so a re-entered scene (next race) starts clean.
     this.entered = false;
     this.camMode = "countdown";
@@ -593,9 +640,12 @@ export class RaceScene implements IGameScreen {
    * Phase 6 (T16): keep the race world alive across Racing → Results so the podium
    * sequence can animate over it. GameApp calls beginPodium() right before that
    * transition and endPodium() when leaving Results (race again / main menu).
+   * Also kept alive across Racing → Paused: the frozen scene renders behind the dim
+   * pause overlay and resume is instant (enter() re-entry only refreshes fog + shadow
+   * casters). GameApp runs exit() explicitly when quitting from Paused to MainMenu.
    */
   keepWorldOnExit(to: string): boolean {
-    return to === "Results";
+    return to === "Results" || to === "Paused";
   }
 
   /**
@@ -720,7 +770,9 @@ export class RaceScene implements IGameScreen {
       this.podiumTriggered = true;
       const box0 = this.podiumBoxes[0];
       if (box0) {
-        this.ctx.particleVfx?.confetti({ x: box0.mesh.position.x, y: box0.topY + 1.5, z: box0.mesh.position.z });
+        // confetti() takes a Vector3 (it clones it for the emitter) — a plain object
+        // would throw "clone is not a function" and kill the podium tick.
+        this.ctx.particleVfx?.confetti(new Vector3(box0.mesh.position.x, box0.topY + 1.5, box0.mesh.position.z));
       }
       this.podiumFanfare?.();
     }

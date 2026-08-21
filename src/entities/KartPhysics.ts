@@ -121,6 +121,12 @@ export function starBoostSpeed(): number {
  * (`pos.y = heightAt`) and a mild slope model scales the top-speed cap — uphill slows
  * slightly, downhill speeds up (TUNING.terrain.slopeFactor / slopeClamp). Omitted →
  * flat-world behavior exactly as before.
+ *
+ * `airborne` is optional: when true the kart's tires are off the ground and it COASTS —
+ * steering is frozen and throttle/brake/drag are ignored (constant speed, straight line)
+ * until it lands; item boosts still apply. The controller passes it explicitly when a
+ * rigid body owns vertical motion (the brain has no terrain there); omitted → derived
+ * from `terrain` (pos.y above the surface by more than airborneEpsilon), else false.
  */
 export function stepKart(
   state: KartState,
@@ -130,6 +136,7 @@ export function stepKart(
   topSpeedScale = 1,
   accelScale = 1,
   terrain?: TerrainSampler,
+  airborne?: boolean,
 ): KartState {
   const p = TUNING.physics;
   const it = TUNING.items;
@@ -169,6 +176,13 @@ export function stepKart(
     statusEffects.push(remaining < fx.remaining ? { ...fx, remaining } : fx);
   }
 
+  // ── air control: tires off the ground → coast (no steering, no throttle/brake) ──
+  // The controller passes `airborne` explicitly when a rigid body owns vertical motion
+  // (the brain runs without terrain there); otherwise derive it from the surface.
+  const isAirborne =
+    airborne ??
+    (terrain ? state.pos.y > terrain.heightAt(state.pos.x, state.pos.z) + TUNING.terrain.airborneEpsilon : false);
+
   // ── mild slope model (Phase 4.1): uphill slows slightly, downhill speeds up ───
   let slopeScale = 1;
   if (terrain) {
@@ -199,24 +213,27 @@ export function stepKart(
 
   // ── throttle / brake / reverse (ignored while skidding — the kart coasts) ───────
   if (!skidActive && !bulletBillActive) {
-    if (input.throttle > 0 && speed < effectiveMax) {
-      const accel = p.accelBase * (0.8 + 0.04 * state.profile.accelStat) * accelScale;
-      speed += input.throttle * accel * dt;
-    } else if (input.throttle < 0) {
-      // Braking is stronger than acceleration; below zero it becomes reverse.
-      speed += input.throttle * p.brakeForce * accelScale * dt;
+    if (!isAirborne) {
+      if (input.throttle > 0 && speed < effectiveMax) {
+        const accel = p.accelBase * (0.8 + 0.04 * state.profile.accelStat) * accelScale;
+        speed += input.throttle * accel * dt;
+      } else if (input.throttle < 0) {
+        // Braking is stronger than acceleration; below zero it becomes reverse.
+        speed += input.throttle * p.brakeForce * accelScale * dt;
+      }
+
+      // ── drag: terminal-speed model ───────────────────────────────────────────
+      if (speed > effectiveMax) {
+        const k = surface === "offRoad" ? p.dragCoef * 2 : p.dragCoef;
+        speed -= (speed - effectiveMax) * Math.min(1, k * dt);
+      } else if ((speed > 0 && input.throttle <= 0) || (speed < 0 && input.throttle >= 0)) {
+        // Coasting with no throttle pushing that way: decay toward a stop.
+        speed -= speed * p.dragCoef * dt;
+      }
     }
 
-    // ── drag: terminal-speed model ───────────────────────────────────────────
-    if (speed > effectiveMax) {
-      const k = surface === "offRoad" ? p.dragCoef * 2 : p.dragCoef;
-      speed -= (speed - effectiveMax) * Math.min(1, k * dt);
-    } else if ((speed > 0 && input.throttle <= 0) || (speed < 0 && input.throttle >= 0)) {
-      // Coasting with no throttle pushing that way: decay toward a stop.
-      speed -= speed * p.dragCoef * dt;
-    }
-
-    // Boost/star: force at least the boost target while active (brake still works above it).
+    // Boost/star: force at least the boost target while active (brake still works above
+    // it). Item effects are not player input, so boosts apply even while airborne.
     if (boostTarget !== null && speed < boostTarget) {
       speed = boostTarget;
     }
@@ -241,7 +258,8 @@ export function stepKart(
   if (skidActive) {
     // Skid: a fixed spin replaces steering; throttle/steer inputs are ignored.
     heading += it.skidSpinRate * dt * Math.sign(speed || 1);
-  } else if (!bulletBillActive) {
+  } else if (!bulletBillActive && !isAirborne) {
+    // (Airborne falls through with no change — no air control, the kart flies straight.)
     let steer = input.steer;
     if (shrinkActive) steer *= it.shrinkSteerFactor; // lightning: reduced steering authority
     const speedFactor = clamp(Math.abs(speed) / (maxSpeed * 0.4), 0, 1);

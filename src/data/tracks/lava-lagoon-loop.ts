@@ -93,6 +93,9 @@ export const LAGOON_TRACK: TrackDefinition = {
     fogDensity: 0.006, // denser than meadows
     sunIntensity: 0.55,
     ambientIntensity: 0.4, // dimmer, moodier rig
+    // Low cool sun near the horizon — long dramatic shadows matching the
+    // starfield skybox and the canyon's moody atmosphere.
+    sunDirection: [0.8, -0.45, 0.2],
   },
   itemBoxClusters: [{ t: 0.1 }, { t: 0.35 }, { t: 0.6 }, { t: 0.85 }],
   hazards: [

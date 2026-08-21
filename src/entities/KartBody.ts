@@ -33,8 +33,8 @@ import type { Scene } from "@babylonjs/core/scene.js";
 
 import { TUNING } from "../data/tuning.js";
 import type { KartEntity } from "./KartEntity.js";
-import type { KartState } from "./KartPhysics.js";
-import { driveImpulse, forwardVec, targetYawRate } from "./kartDriveMath.js";
+import type { KartState, TerrainSampler } from "./KartPhysics.js";
+import { driveImpulse, forwardVec, targetYawRate, uphillGradient } from "./kartDriveMath.js";
 
 export class KartBody {
   private readonly _body: PhysicsBody;
@@ -45,6 +45,8 @@ export class KartBody {
   private _lastAppliedYaw = 0;
   private _disposed = false;
   private readonly _tmpV3 = new Vector3();
+  /** Terrain heightfield for uphill-power sampling (null → flat-world drive authority). */
+  private readonly _terrain: TerrainSampler | null;
 
   // ── Bump detection (kart↔kart collision events → shake/SFX) ────────────────
   /** Set by the scene (player body only): fires when this kart bumps another KART. */
@@ -58,8 +60,9 @@ export class KartBody {
   /** Node-name suffix identifying a kart body (vs. the terrain heightfield / props). */
   static readonly KARTBODY_SUFFIX = "-kartbody";
 
-  constructor(scene: Scene, k: KartEntity) {
+  constructor(scene: Scene, k: KartEntity, terrain?: TerrainSampler) {
     const pw = TUNING.physicsWorld;
+    this._terrain = terrain ?? null;
 
     // Invisible anchor at the spawn point. The capsule axis runs along local Z (the kart's
     // long axis) so head-on bumps read correctly; node Y sits centerHeightM above the
@@ -179,7 +182,14 @@ export class KartBody {
     // ramp), so the body gets full impulse authority too — items stay instantly punchy.
     // Everything else chases with bounded engine authority (bumps matter).
     const snapped = next.statusEffects.some((e) => e.kind === "bulletBill" || e.kind === "boost" || e.kind === "star");
-    const impulseMag = snapped ? (next.speed - curFwd) * pw.kartMassKg : driveImpulse(curFwd, next.speed, pw.kartMassKg, dt);
+    // Uphill power: while climbing, scale the engine's drive authority up so the kart fights
+    // gravity harder on climbs (less momentum loss). Flat/downhill = base authority.
+    let maxAccel = pw.maxDriveAccelMps2;
+    if (this._terrain) {
+      const g = uphillGradient(this._terrain, this._node.position.x, this._node.position.z, next.heading);
+      if (g > 0) maxAccel = pw.maxDriveAccelMps2 * (1 + pw.uphillPowerFactor * g);
+    }
+    const impulseMag = snapped ? (next.speed - curFwd) * pw.kartMassKg : driveImpulse(curFwd, next.speed, pw.kartMassKg, dt, maxAccel);
 
     // Impulse through the center of mass → pure translation, no torque. World-space
     // location per the plugin's applyImpulse contract.

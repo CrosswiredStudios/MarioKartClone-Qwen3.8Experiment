@@ -79,4 +79,35 @@ describe("validateTrackDefinition (tampered copies)", () => {
     const track: TrackDefinition = { ...MEADOWS_TRACK, laps: 5 };
     expect(() => validateTrackDefinition(track)).toThrow(/laps must be 3/);
   });
+
+  it("accepts a valid downward sunDirection on both tracks", () => {
+    for (const track of [MEADOWS_TRACK, LAGOON_TRACK]) {
+      const [x, y, z] = track.theme.sunDirection;
+      expect(Number.isFinite(x)).toBe(true);
+      expect(Number.isFinite(y)).toBe(true);
+      expect(Number.isFinite(z)).toBe(true);
+      expect(y).toBeLessThan(0); // sun above the horizon
+      expect(Math.hypot(x, y, z)).toBeGreaterThan(0);
+    }
+  });
+
+  it("throws when sunDirection.y is >= 0 (sun below/at horizon)", () => {
+    const track: TrackDefinition = { ...MEADOWS_TRACK, theme: { ...MEADOWS_TRACK.theme, sunDirection: [0.4, 1, 0.3] } };
+    expect(() => validateTrackDefinition(track)).toThrow(/sunDirection\.y must be < 0/);
+  });
+
+  it("accepts a straight-down sunDirection and rejects [0,0,0]", () => {
+    // Straight down is a legitimate (if flat) light angle.
+    const straight: TrackDefinition = { ...MEADOWS_TRACK, theme: { ...MEADOWS_TRACK.theme, sunDirection: [0, -1, 0] } };
+    expect(() => validateTrackDefinition(straight)).not.toThrow();
+
+    // The all-zero vector is rejected (its y=0 trips the "above horizon" check).
+    const zeroed: TrackDefinition = { ...MEADOWS_TRACK, theme: { ...MEADOWS_TRACK.theme, sunDirection: [0, 0, 0] } };
+    expect(() => validateTrackDefinition(zeroed)).toThrow();
+  });
+
+  it("throws when sunDirection has a non-finite component", () => {
+    const track: TrackDefinition = { ...MEADOWS_TRACK, theme: { ...MEADOWS_TRACK.theme, sunDirection: [0.4, -1, NaN] } };
+    expect(() => validateTrackDefinition(track)).toThrow(/sunDirection must be \[x, y, z\] finite numbers/);
+  });
 });

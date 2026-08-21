@@ -107,7 +107,17 @@ export class SettingsPanel {
     muteBox.addEventListener("change", () => this.changeMute(muteBox.checked));
     muteRow.append(muteLabel, muteBox);
 
-    overlay.append(title, qualityRow, master.row, music.row, sfx.row, muteRow);
+    // Explicit way out: this overlay is full-screen (inset:0, z-31) and sits ABOVE the
+    // pause menu (z-30), so it covers the pause "Settings" toggle — re-clicking that to
+    // close is impossible. A dedicated Back button guarantees a return to the pause menu.
+    const back = document.createElement("button");
+    back.type = "button";
+    back.className = "settings-back-btn";
+    back.dataset.testid = "settings-back";
+    back.textContent = "Back to Menu";
+    back.addEventListener("click", () => this.hide());
+
+    overlay.append(title, qualityRow, master.row, music.row, sfx.row, muteRow, back);
     document.body.appendChild(overlay);
 
     this.overlay = overlay;

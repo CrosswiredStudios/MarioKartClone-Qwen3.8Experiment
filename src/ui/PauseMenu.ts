@@ -69,8 +69,9 @@ export class PauseMenu implements IGameScreen {
       this.sfx.uiClick();
       ctx.eventBus.emit("ui:navigate", { to: "Racing" });
     });
-    // Settings toggles the sub-overlay: click once to open, again to close (the panel has no
-    // dedicated close button — it's a child of pause, so returning here is how you leave it).
+    // Settings opens the sub-overlay. The overlay is full-screen and sits above this menu,
+    // so it can't be closed by re-clicking this button — the panel's own Back button closes
+    // it (see SettingsPanel). This button only ever opens it.
     const settings = this.makeButton("Settings", "pause-settings", () => {
       this.sfx.uiClick();
       if (!this.panel) return;

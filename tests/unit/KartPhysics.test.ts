@@ -279,4 +279,62 @@ describe("KartPhysics.stepKart", () => {
       expect(next.pos.z).toBeGreaterThan(0);
     });
   });
+
+  describe("air control (airborne)", () => {
+    /** Flat terrain at height `h` everywhere. */
+    const flat = (h: number): Parameters<typeof stepKart>[6] => ({ heightAt: () => h });
+    /** A kart sitting well above a 0 m surface → airborne. */
+    const lifted = (over: Partial<KartState> = {}): KartState =>
+      makeState({ pos: { x: 0, y: 10, z: 0 }, speed: 20, ...over });
+
+    it("(a) freezes heading while airborne (no air steering)", () => {
+      const s = lifted({ heading: 0.3 });
+      const next = stepKart(s, input({ steer: 1 }), "road", DT, 1, 1, flat(0));
+      expect(next.heading).toBeCloseTo(0.3, 9); // unchanged despite full steer
+    });
+
+    it("(b) ignores throttle and brake while airborne (speed frozen)", () => {
+      const accel = stepKart(lifted(), input({ throttle: 1 }), "road", DT, 1, 1, flat(0));
+      expect(accel.speed).toBeCloseTo(20, 9); // no acceleration in the air
+
+      const brake = stepKart(lifted(), input({ throttle: -1 }), "road", DT, 1, 1, flat(0));
+      expect(brake.speed).toBeCloseTo(20, 9); // no braking in the air
+    });
+
+    it("(c) coasts at constant speed in a straight line (no drag, frozen heading)", () => {
+      // Start high enough that the kart is still airborne after all 60 steps
+      // (falling from y=200 covers ~11.8 m in 1 s), so it never lands mid-test.
+      let s = lifted({ pos: { x: 0, y: 200, z: 0 }, heading: -0.4 });
+      for (let i = 0; i < 60; i++) {
+        const next = stepKart(s, input({ throttle: 1, steer: 1 }), "road", DT, 1, 1, flat(0));
+        expect(next.speed).toBeCloseTo(20, 6); // constant — no coasting drag in the air
+        expect(next.heading).toBeCloseTo(-0.4, 9); // frozen
+        s = next;
+      }
+      // Still flying forward along the frozen heading (heading -0.4 → x<0, z>0).
+      expect(s.pos.z).toBeGreaterThan(15);
+    });
+
+    it("(d) item boosts still apply while airborne", () => {
+      const s = lifted({ statusEffects: [{ kind: "boost", speed: TUNING.drift.miniBoostSpeed, remaining: 5 }] });
+      const next = stepKart(s, input(), "road", DT, 1, 1, flat(0));
+      expect(next.speed).toBeCloseTo(TUNING.drift.miniBoostSpeed, 6); // boost forces speed in the air
+    });
+
+    it("(e) a grounded kart keeps full steering + throttle (regression)", () => {
+      const s = makeState({ pos: { x: 0, y: 0, z: 0 }, speed: 20, heading: 0.3 }); // on the surface
+      const next = stepKart(s, input({ throttle: 1, steer: 1 }), "road", DT, 1, 1, flat(0));
+      expect(next.heading).not.toBeCloseTo(0.3, 6); // steering works when grounded
+      expect(next.speed).toBeGreaterThan(20); // throttle works when grounded
+    });
+
+    it("(f) explicit airborne=true overrides terrain (rigid-body path)", () => {
+      // Kart sits ON the surface (terrain says grounded) but the controller reports
+      // airborne — e.g. a rigid body in the air whose synced pos.y is above the ground.
+      const s = makeState({ pos: { x: 0, y: 0, z: 0 }, speed: 20, heading: 0.3 });
+      const next = stepKart(s, input({ throttle: 1, steer: 1 }), "road", DT, 1, 1, flat(0), true);
+      expect(next.heading).toBeCloseTo(0.3, 9); // frozen despite terrain saying grounded
+      expect(next.speed).toBeCloseTo(20, 9); // no throttle despite terrain saying grounded
+    });
+  });
 });

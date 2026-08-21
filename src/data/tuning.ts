@@ -19,7 +19,7 @@ export const TUNING = {
   // a real body. Terrain is ONE static heightfield body sampled from the pure HeightField,
   // so the physical surface matches the rendered ground exactly.
   physicsWorld: {
-    gravityY: -9.81, // m/s² — scene-level Havok gravity
+    gravityY: -14, // m/s² — scene-level Havok gravity (heavier than real 9.81 so boosted/airborne karts fall back faster instead of floating down slowly)
     timestepSec: 1 / 60, // fixed plugin step; Scene auto-steps each render frame
     kartMassKg: 120, // per-kart rigid body mass (bumping momentum scales with this)
     kartRestitution: 0.35, // bounciness of kart↔kart and kart↔terrain contacts
@@ -34,6 +34,11 @@ export const TUNING = {
     // after a bump steals forward velocity the engine takes ~0.3–1 s to recover instead of
     // snapping back in one frame (arcade "shoved" feel). Boost jumps (→40+ m/s) chase fast.
     maxDriveAccelMps2: 40,
+    // Uphill power (hybrid model): while climbing, KartBody scales drive authority up by
+    // (1 + uphillPowerFactor × clampedGradient) so the engine fights gravity harder on
+    // climbs — less momentum loss going uphill. Flat ground / downhill = unchanged. At the
+    // steepest clamped slope (terrain.slopeClamp 0.35) this is +17.5% authority.
+    uphillPowerFactor: 0.5,
     // Kart collision shape (capsule along the kart's long axis).
     capsuleRadiusM: 0.55,
     capsuleHalfLengthM: 0.9, // pointA→pointB half-extent; total length ≈ radius*2 + halfLength*2
@@ -108,6 +113,9 @@ export const TUNING = {
   // recomputed once per second (not per frame) to avoid float-noise rank flicker.
   race: {
     countdownSeconds: 3,
+    // Loading-screen fallback: force the world "ready" after this many seconds even if a
+    // texture never reports isReady() (e.g. a failed/stuck load) so the countdown can't hang.
+    worldReadyTimeoutSec: 8,
     checkpointsPerLap: 8,
     standingsIntervalSec: 1,
     aiFinishTimeoutSec: 10,
@@ -129,9 +137,19 @@ export const TUNING = {
   // layer both read from here — no raw numbers elsewhere.
   terrain: {
     // Road ribbon sits this far above the heightfield so it never z-fights or gets
-    // poked through by a rounded-up ground vertex (the heightmap is 8-bit quantized;
-    // even with tight-range encoding that's ~5 cm on Lagoon, so 0.2 clears it).
-    roadYOffset: 0.2,
+    // poked through by a rounded-up ground vertex. On convex crests the coarse ground
+    // grid (~0.7 m cells) + 8-bit rounding can overshoot the true field by up to
+    // ~0.3 m near the road edges, so 0.35 clears the worst case with headroom.
+    roadYOffset: 0.35,
+    // Road slab (visual thickness): the asphalt ribbon is a zero-thickness sheet, so
+    // a quantized ground vertex can still poke through it on steep crests. A slab body
+    // runs beneath/around it — side walls flare OUTWARD by this much beyond the road's
+    // half-width and DOWN to bury into the terrain, hiding any seam at the shoulder.
+    shoulderFlareM: 1.2,
+    // How far BELOW local terrain the slab's bottom edge is buried (m). Must exceed the
+    // heightmap's ~5 cm quantization so it always tucks under the ground mesh; 0.45
+    // leaves comfortable margin on both tracks (bumped with roadYOffset 0.35).
+    buryDepthM: 0.45,
     // Simple gravity for airborne karts (cliff drops): vertical accel in m/s².
     gravity: 22,
     // A kart is "airborne" when it sits more than this above the surface — a
@@ -147,7 +165,7 @@ export const TUNING = {
     corridorMargin: 10,
     /** Mild slope speed model: fraction of top-speed lost per unit uphill gradient
      *  (dy/dx along heading), clamped to ±slopeClamp. Downhill adds symmetrically. */
-    slopeFactor: 0.12,
+    slopeFactor: 0.06,
     slopeClamp: 0.35,
     /** Half-distance (m) of the central-difference gradient sample along heading. */
     slopeSampleDist: 1,

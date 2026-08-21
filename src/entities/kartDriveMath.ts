@@ -9,7 +9,7 @@
  */
 
 import { TUNING } from "../data/tuning.js";
-import type { KartState } from "./KartPhysics.js";
+import type { KartState, TerrainSampler } from "./KartPhysics.js";
 
 /**
  * The drive impulse (kg·m/s) that closes the gap between the body's current forward
@@ -24,10 +24,34 @@ export function driveImpulse(
   targetSpeed: number,
   massKg: number,
   dt: number,
+  // `number` (not the literal type from `TUNING ... as const`) so callers can pass a scaled value.
+  maxAccelMps2: number = TUNING.physicsWorld.maxDriveAccelMps2,
 ): number {
   const delta = targetSpeed - currentForwardSpeed;
-  const maxDelta = TUNING.physicsWorld.maxDriveAccelMps2 * dt;
+  const maxDelta = maxAccelMps2 * dt;
   return Math.sign(delta) * Math.min(Math.abs(delta), maxDelta) * massKg;
+}
+
+/**
+ * Clamped uphill gradient (dy/dx along heading) at a world XZ position. Returns 0 when
+ * flat or downhill; up to TUNING.terrain.slopeClamp when climbing steeply. Reuses the exact
+ * central-difference convention from stepKart's slope model so the muscle and brain agree on
+ * what "uphill" means. KartBody scales drive authority by (1 + uphillPowerFactor × g).
+ */
+export function uphillGradient(
+  terrain: TerrainSampler,
+  x: number,
+  z: number,
+  heading: number,
+): number {
+  const d = TUNING.terrain.slopeSampleDist;
+  const fx = Math.sin(heading);
+  const fz = Math.cos(heading);
+  // Central difference along the travel direction; >0 means uphill.
+  const gradient =
+    (terrain.heightAt(x + fx * d, z + fz * d) - terrain.heightAt(x - fx * d, z - fz * d)) /
+    (2 * d);
+  return Math.max(0, Math.min(gradient, TUNING.terrain.slopeClamp));
 }
 
 /**

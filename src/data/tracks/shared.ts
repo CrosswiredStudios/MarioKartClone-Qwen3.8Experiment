@@ -15,6 +15,12 @@ export interface TrackTheme {
   readonly fogDensity: number; // per-meter exponential density
   readonly sunIntensity: number; // directional light intensity
   readonly ambientIntensity: number;
+  /**
+   * Directional sun direction — points FROM the sun TOWARD the scene (y < 0,
+   * i.e. the sun is above the horizon). Not required to be normalized; the
+   * render layer normalizes it. Per-track so each map gets its own light angle.
+   */
+  readonly sunDirection: [number, number, number];
 }
 
 export interface ItemBoxCluster {
@@ -111,6 +117,18 @@ export function validateTrackDefinition(track: TrackDefinition): void {
     if (!isFiniteNumber(theme[key]) || theme[key] < 0) {
       throw new Error(`track ${track.id}: theme.${key} must be a non-negative finite number`);
     }
+  }
+  // Sun direction: [x, y, z] finite numbers, pointing downward (sun above horizon),
+  // non-zero length. The render layer normalizes it.
+  const sd = theme.sunDirection;
+  if (!Array.isArray(sd) || sd.length !== 3 || !sd.every(isFiniteNumber)) {
+    throw new Error(`track ${track.id}: theme.sunDirection must be [x, y, z] finite numbers`);
+  }
+  if (sd[1] >= 0) {
+    throw new Error(`track ${track.id}: theme.sunDirection.y must be < 0 (sun above the horizon)`);
+  }
+  if (Math.hypot(sd[0], sd[1], sd[2]) === 0) {
+    throw new Error(`track ${track.id}: theme.sunDirection must not be [0, 0, 0]`);
   }
   // CubeTexture base path: relative, no extension — face suffixes are appended by the loader.
   if (!/^textures\/[a-z0-9_-]+$/.test(theme.skybox)) {

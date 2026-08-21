@@ -1,4 +1,5 @@
 import "../styles/countdown.css";
+import "../styles/loading.css";
 import { AudioManager } from "../audio/AudioManager.js";
 import { MusicSequencer } from "../audio/MusicSequencer.js";
 import { SfxPlayer } from "../audio/SfxPlayer.js";
@@ -239,6 +240,39 @@ class CountdownOverlay {
 }
 
 /**
+ * Race loading screen — opaque full-screen overlay shown while the track world's async
+ * textures + first-frame shader compile finish (see RaceScene.isWorldReady). Owned by
+ * GameApp like the countdown overlay: shown at Countdown enter, hidden the moment the
+ * world is ready. It sits ABOVE the countdown overlay (z-index), so the player never
+ * sees a frozen "3" over a half-loaded track.
+ */
+class LoadingScreen {
+  private el: HTMLDivElement | null = null;
+
+  /** Build the overlay DOM (idempotent — a second show() before hide() is a no-op). */
+  show(trackName: string): void {
+    if (this.el) return;
+    const div = document.createElement("div");
+    div.className = "loading-screen";
+    div.dataset.testid = "loading-screen";
+    const spinner = document.createElement("div");
+    spinner.className = "loading-spinner";
+    const label = document.createElement("div");
+    label.className = "loading-label";
+    label.textContent = `Loading ${trackName}…`;
+    div.append(spinner, label);
+    document.body.appendChild(div);
+    this.el = div;
+  }
+
+  /** Tear down the overlay DOM (idempotent). */
+  hide(): void {
+    this.el?.remove();
+    this.el = null;
+  }
+}
+
+/**
  * Application root: owns the event bus, audio, input, screen state machine and
  * the fixed-timestep logic loop. Babylon objects are carried opaquely so this
  * file stays importable in Node (headless tests).
@@ -268,6 +302,8 @@ export class GameApp {
   private readonly hud: Hud;
   /** Phase 7 — traffic-light countdown overlay shown over the live race scene. */
   private readonly countdownOverlay: CountdownOverlay;
+  /** Race loading screen — opaque overlay while the world's textures/shaders load. */
+  private readonly loadingScreen = new LoadingScreen();
   /** Persisted player settings (Phase 4 Step 10). */
   private readonly settingsStore = new SettingsStore();
   /**
@@ -458,12 +494,18 @@ export class GameApp {
         const rs = new RaceScene(this.ctx, this.race!);
         this.raceScene = rs; // Phase 6 (T16): held for podium driving + teardown.
         this.machine.register(rs);
+        // Loading screen: in the DOM before the countdown overlay. GameApp.update() hides
+        // it the moment RaceScene.isWorldReady flips, and the countdown stepping is gated
+        // on the same flag — the player never sees a frozen "3" over a half-loaded track.
+        const trackDef = this.ctx.raceConfig.mapId === LAGOON_TRACK.id ? LAGOON_TRACK : MEADOWS_TRACK;
+        this.loadingScreen.show(trackDef.name);
         this.countdownOverlay.show();
       }
       // Leaving Countdown (anywhere, including the GO → Racing hand-off) hides the
       // overlay. hide() is idempotent and show() re-subscribes on the next race's enter.
       if (!this.ctx.freeDriveMode && this.machine.currentId === "Countdown") {
         this.countdownOverlay.hide();
+        this.loadingScreen.hide();
       }
       // Step 12: auto-enable AI drive when the localStorage flag is set. Gated on
       // debugAllowed (dev mode or ?debug) so a plain production build never reads the
@@ -479,6 +521,17 @@ export class GameApp {
       // matching the pre-podium ordering. Guarded + idempotent (no-op if already torn down).
       if (!this.ctx.freeDriveMode && this.machine.currentId === "Results" && to !== "Results") {
         // Phase 7: the engine hum runs through the finish-out and ends here.
+        this.sfx.stopEngineLoop();
+        this.raceScene?.endPodium();
+        this.raceScene?.exit();
+      }
+      // Quitting from Paused to MainMenu tears down the kept-alive race world — exit()
+      // was skipped on Racing → Paused (keepWorldOnExit), so without this the meshes,
+      // bodies, and camera would leak. Placed BEFORE teardownRace so renderPipeline.
+      // exitMap() inside exit() precedes pipeline.dispose(). endPodium is a guarded
+      // no-op here (the podium only exists while in Results). Resume (Paused → Racing)
+      // needs no teardown — enter() re-entry is cheap.
+      if (!this.ctx.freeDriveMode && this.machine.currentId === "Paused" && to === "MainMenu") {
         this.sfx.stopEngineLoop();
         this.raceScene?.endPodium();
         this.raceScene?.exit();
@@ -633,7 +686,14 @@ export class GameApp {
     // Phase 7: also stepped during the finish-out — we're in Results but the field is
     // still racing after the player crossed (phase !== "finished").
     if (!this.ctx.freeDriveMode && this.race) {
-      const stepping = id === "Countdown" || id === "Racing" || (id === "Results" && this.race.phase !== "finished");
+      // Loading screen — the countdown only starts once the world's textures + first
+      // frame are ready (RaceScene.isWorldReady); null scene (defensive) → ready.
+      const worldReady = this.raceScene?.isWorldReady ?? true;
+      if (id === "Countdown" && worldReady) this.loadingScreen.hide();
+      const stepping =
+        (id === "Countdown" && worldReady) ||
+        id === "Racing" ||
+        (id === "Results" && this.race.phase !== "finished");
       if (stepping) this.race.update(dt);
     }
     // Refresh HUD text each logic step while racing (frozen automatically when Paused,
@@ -699,6 +759,7 @@ export class GameApp {
     if (!this.race) return;
     this.race.musicHook = null;
     this.race = null;
+    this.loadingScreen.hide(); // safety — the loading screen must never outlive the race
     // Drop the per-race "Racing" screen so the NEXT race registers a fresh scene bound
     // to the new controller. Without this, the second race re-enters the old RaceScene
     // (bound to the finished first controller): HUD updates but the world/camera are frozen.

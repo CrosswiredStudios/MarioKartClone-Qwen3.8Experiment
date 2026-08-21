@@ -26,15 +26,15 @@ import {
   MeshBuilder,
   ParticleSystem,
   PointLight,
-  StandardMaterial,
   TransformNode,
   Vector3,
   VertexBuffer,
   type AbstractMesh,
   type Scene,
 } from "@babylonjs/core";
-import { createRng } from "../core/Rng.js";
+import { createRng, type Rng } from "../core/Rng.js";
 import type { IQualityProbe } from "../core/GameStateMachine.js";
+import { createMatteMaterial } from "../rendering/materials.js";
 import type { PropKind, TrackDefinition } from "../data/tracks/shared.js";
 import { placeAlongSpline } from "./TrackBuilder.js";
 import type { HeightField } from "./TrackElevation.js";
@@ -45,6 +45,9 @@ import { hash01, type Rgb } from "./terrainShading.js";
 const POLY_OCTA = 1;
 const POLY_DODECA = 2;
 const POLY_ICOSA = 3;
+
+/** Number of distinct tree shapes (conifers + broadleaf). Each placed tree picks one, deterministically. */
+const TREE_VARIANTS = 3;
 
 /** Geyser plume tuning (visual only — no gameplay). */
 const GEYSER_EMIT_RATE = 40; // × quality budget() at High
@@ -63,8 +66,8 @@ export class PropBuilder {
   private instances: AbstractMesh[] = []; // every placed InstancedMesh (disposed on rebuild/teardown)
   private torchLights: PointLight[] = [];
   private geyserSystems: ParticleSystem[] = [];
-  /** Merged source mesh per kind — survives rebuilds, disposed with the builder. Typed Mesh (not AbstractMesh) because we call createInstance() on it. */
-  private sources = new Map<PropKind, Mesh | null>();
+  /** Merged source mesh per (kind, variant) — survives rebuilds, disposed with the builder. Keyed by string so tree variants share one map (`tree:<n>`); other kinds use their bare kind name. Typed Mesh because we call createInstance() on it. */
+  private sources = new Map<string, Mesh | null>();
   /** Shared soft-dot texture for geyser plumes; disposed with the builder. */
   private readonly dotTexture: DynamicTexture;
   /** Clears our onPresetChanged hook on dispose (only if we still own it). */
@@ -119,7 +122,7 @@ export class PropBuilder {
       if (count === 0) continue;
       for (const catalogIdx of this.sampleOrder(idxs, count)) {
         const spawn = this.track.propCatalog[catalogIdx];
-        this.placeOne(kind, spawn.t, spawn.lateralOffset, spawn.scale ?? 1, spawn.rotationY ?? 0);
+        this.placeOne(kind, spawn.t, spawn.lateralOffset, spawn.scale ?? 1, spawn.rotationY ?? 0, catalogIdx);
       }
     }
 
@@ -160,9 +163,10 @@ export class PropBuilder {
     return h >>> 0;
   }
 
-  /** Place one prop instance of `kind` at arc t / lateral offset. */
-  private placeOne(kind: PropKind, t: number, lateralOffset: number, scale: number, rotationY: number): void {
-    const source = this.sourceFor(kind);
+  /** Place one prop instance of `kind` at arc t / lateral offset. `catalogIdx` seeds a deterministic per-entry tree variant (stable across quality-preset rebuilds). */
+  private placeOne(kind: PropKind, t: number, lateralOffset: number, scale: number, rotationY: number, catalogIdx: number): void {
+    const variant = kind === "tree" ? this.treeVariantFor(catalogIdx) : 0;
+    const source = this.sourceFor(kind, variant);
     if (!source) return;
 
     const place = placeAlongSpline(this.spline, t, lateralOffset);
@@ -185,25 +189,32 @@ export class PropBuilder {
     }
   }
 
-  /** Lazily build + cache the merged source mesh for a kind. */
-  private sourceFor(kind: PropKind): Mesh | null {
-    if (this.sources.has(kind)) return this.sources.get(kind) ?? null;
-    const mesh = this.buildSource(kind);
-    this.sources.set(kind, mesh);
+  /** Lazily build + cache the merged source mesh for a kind/variant. */
+  private sourceFor(kind: PropKind, variant: number): Mesh | null {
+    const key = this.sourceKey(kind, variant);
+    if (this.sources.has(key)) return this.sources.get(key) ?? null;
+    const mesh = this.buildSource(kind, variant);
+    this.sources.set(key, mesh);
     return mesh;
   }
 
-  /** Build one merged source mesh for a kind. Parts are positioned FIRST — MergeMeshes bakes each part's world matrix into the vertex data (verified in v9), so the merged geometry is the finished prop standing on y=0. */
-  private buildSource(kind: PropKind): Mesh | null {
+  /** Map a kind/variant to its cache key — trees get `tree:<n>`, everything else is single-variant. */
+  private sourceKey(kind: PropKind, variant: number): string {
+    return kind === "tree" ? `tree:${variant}` : kind;
+  }
+
+  /** Deterministic per-catalog-entry tree variant (stable across rebuilds/launches). */
+  private treeVariantFor(catalogIdx: number): number {
+    const rng = createRng((this.trackSeed() ^ Math.imul(catalogIdx + 1, 0x9e3779b1)) >>> 0);
+    return rng.int(TREE_VARIANTS);
+  }
+
+  /** Build one merged source mesh for a kind/variant. Parts are positioned FIRST — MergeMeshes bakes each part's world matrix into the vertex data (verified in v9), so the merged geometry is the finished prop standing on y=0. */
+  private buildSource(kind: PropKind, variant: number): Mesh | null {
     const accent = hexToColor3(this.track.theme.accentColor);
     switch (kind) {
-      case "tree": // trunk + 3-tier conifer canopy (reads as a real tree, not a cone)
-        return this.merge([
-          this.part("trunk", () => MeshBuilder.CreateCylinder(`src-tree-trunk`, { height: 1.2, diameter: 0.4 }, this.scene), new Color3(0.42, 0.28, 0.15)),
-          this.part("canopyLow", () => MeshBuilder.CreateCylinder(`src-tree-canopy-low`, { height: 1.8, diameterTop: 0, diameterBottom: 2.4 }, this.scene), new Color3(0.16, 0.44, 0.18)),
-          this.part("canopyMid", () => MeshBuilder.CreateCylinder(`src-tree-canopy-mid`, { height: 1.5, diameterTop: 0, diameterBottom: 1.9 }, this.scene), new Color3(0.18, 0.5, 0.2)),
-          this.part("canopyTop", () => MeshBuilder.CreateCylinder(`src-tree-canopy-top`, { height: 1.2, diameterTop: 0, diameterBottom: 1.3 }, this.scene), new Color3(0.2, 0.55, 0.22)),
-        ]);
+      case "tree": // multi-variant forest: conifers + broadleaf, mottled foliage
+        return this.buildTreeVariant(variant);
       case "mushroom": // cylinder stem + sphere cap (red) + white spot spheres
         return this.merge([
           this.part("stem", () => MeshBuilder.CreateCylinder(`src-mush-stem`, { height: 0.7, diameter: 0.4 }, this.scene), new Color3(0.92, 0.88, 0.8)),
@@ -253,13 +264,81 @@ export class PropBuilder {
     }
   }
 
+  // ── tree variants ──────────────────────────────────────────────────────
+
+  /** Build one of the TREE_VARIANTS distinct tree shapes (stable per variant index). */
+  private buildTreeVariant(variant: number): Mesh | null {
+    const rng = createRng((this.trackSeed() + Math.imul(variant + 1, 7919)) >>> 0);
+    if (variant === 1) return this.buildBroadleaf(rng, variant);
+    // Conifers for the other variants — v2 is a shorter/wider, yellower pine.
+    const wide = variant === 2;
+    return this.buildConifer(rng, variant, {
+      tiers: wide ? 4 : 5,
+      baseRadius: wide ? 3.0 : 2.4,
+      topShrink: wide ? 1.7 : 2.0,
+      heightScale: wide ? 0.85 : 1.0,
+      hueShift: wide ? 0.06 : 0,
+    });
+  }
+
+  /** Stacked-cone conifer with per-tier radius jitter + mottled foliage. */
+  private buildConifer(
+    rng: Rng,
+    variant: number,
+    o: { tiers: number; baseRadius: number; topShrink: number; heightScale: number; hueShift: number },
+  ): Mesh | null {
+    const parts: Array<[Mesh, Color3]> = [];
+    const trunkH = (1.2 + rng.range(0, 0.4)) * o.heightScale;
+    const trunkColor = new Color3(0.42, 0.28, 0.15);
+    // Mottle the trunk too so EVERY part of the merged tree carries a color buffer
+    // (uniform attribute set → clean MergeMeshes) and bark reads as organic.
+    const [trunk] = this.mottledPart(`t${variant}-trunk`, () => MeshBuilder.CreateCylinder(`src-tree-t${variant}-trunk`, { height: trunkH, diameter: 0.35 }, this.scene), trunkColor);
+    trunk.position.y = trunkH / 2;
+    parts.push([trunk, trunkColor]);
+
+    let yTop = trunkH * 0.75; // first tier overlaps the trunk top
+    for (let i = 0; i < o.tiers; i++) {
+      const frac = o.tiers <= 1 ? 0 : i / (o.tiers - 1); // 0 bottom .. 1 top
+      const radius = Math.max(0.4, (o.baseRadius - frac * o.topShrink) * rng.range(0.92, 1.08));
+      const h = (1.5 - frac * 0.5) * o.heightScale;
+      const green = new Color3(0.13 + frac * 0.06 + o.hueShift, 0.4 + frac * 0.12 + o.hueShift * 0.5, 0.17 + frac * 0.05);
+      const [cone] = this.mottledPart(`t${variant}-tier${i}`, () => MeshBuilder.CreateCylinder(`src-tree-t${variant}-tier${i}`, { height: h, diameterTop: 0, diameterBottom: radius }, this.scene), green);
+      cone.position.y = yTop + h / 2;
+      parts.push([cone, green]);
+      yTop += h * 0.6; // nest tiers with overlap for a layered silhouette
+    }
+    return this.merge(parts);
+  }
+
+  /** Broadleaf tree: trunk + overlapping lumpy canopy blobs (non-uniform scale baked in by merge). */
+  private buildBroadleaf(rng: Rng, variant: number): Mesh | null {
+    const parts: Array<[Mesh, Color3]> = [];
+    const trunkH = 1.6 + rng.range(0, 0.5);
+    const trunkColor = new Color3(0.42, 0.28, 0.15);
+    // Mottle the trunk too so EVERY part of the merged tree carries a color buffer
+    // (uniform attribute set → clean MergeMeshes) and bark reads as organic.
+    const [trunk] = this.mottledPart(`t${variant}-trunk`, () => MeshBuilder.CreateCylinder(`src-tree-t${variant}-trunk`, { height: trunkH, diameter: 0.4 }, this.scene), trunkColor);
+    trunk.position.y = trunkH / 2;
+    parts.push([trunk, trunkColor]);
+
+    const blobs = 3 + rng.int(2); // 3–4 canopy lobes
+    for (let i = 0; i < blobs; i++) {
+      const r = 1.0 + rng.range(0, 0.5);
+      const green = new Color3(0.16 + rng.range(-0.03, 0.04), 0.42 + rng.range(-0.05, 0.09), 0.17 + rng.range(-0.02, 0.04));
+      const [blob] = this.mottledPart(`t${variant}-canopy${i}`, () => MeshBuilder.CreateSphere(`src-tree-t${variant}-canopy${i}`, { diameter: r * 2, segments: 8 }, this.scene), green);
+      blob.position.set(rng.range(-0.6, 0.6), trunkH + rng.range(0.15, 1.0), rng.range(-0.6, 0.6));
+      blob.scaling.set(rng.range(0.85, 1.15), rng.range(0.8, 1.0), rng.range(0.85, 1.15)); // lumpy silhouette (baked by merge)
+      parts.push([blob, green]);
+    }
+    return this.merge(parts);
+  }
+
   // ── source-mesh helpers ────────────────────────────────────────────────
 
   /** Single-part source mesh with its own material (optional emissive + vertex mottling). */
   private single(mesh: Mesh, color: Color3, emissive?: Color3, mottleBase?: Rgb): Mesh {
-    const mat = new StandardMaterial(`mat-${mesh.name}`, this.scene);
-    mat.diffuseColor = color;
-    if (emissive) mat.emissiveColor = emissive;
+    // PBR matte; baked vertex colors still multiply the albedo (PBR VERTEXCOLOR define).
+    const mat = createMatteMaterial(this.scene, `mat-${mesh.name}`, color, emissive ? { emissive } : undefined);
     if (mottleBase) this.bakeMottling(mesh, mottleBase);
     mesh.material = mat;
     this.parkSource(mesh);
@@ -270,18 +349,25 @@ export class PropBuilder {
    * Bake per-vertex mottling (±12% brightness, deterministic hash of local XZ) so
    * flat-shaded polyhedra read as organic stone/crystal instead of a single tone.
    * v9 auto-detects the color buffer (mesh.useVertexColors defaults to true).
+   *
+   * MUST be written as RGBA (4 components/vertex, alpha = 1): Babylon's vertex-color
+   * attribute is 4-wide and `Mesh.MergeMeshes` extracts it at that stride. Writing RGB
+   * (3) is harmless for single-part meshes but throws "Invalid typed array length" the
+   * moment a mottled part is merged with others — which the multi-variant trees do.
    */
   private bakeMottling(mesh: Mesh, base: Rgb): void {
     const positions = mesh.getVerticesData(VertexBuffer.PositionKind);
     if (!positions) return;
-    const colors = new Float32Array(positions.length);
-    for (let i = 0; i < positions.length / 3; i++) {
+    const vertexCount = positions.length / 3;
+    const colors = new Float32Array(vertexCount * 4); // RGBA — matches the color attribute stride
+    for (let i = 0; i < vertexCount; i++) {
       const x = positions[i * 3];
       const z = positions[i * 3 + 2];
       const k = 0.88 + 0.24 * hash01(x * 3.1, z * 3.1);
-      colors[i * 3] = base.r * k;
-      colors[i * 3 + 1] = base.g * k;
-      colors[i * 3 + 2] = base.b * k;
+      colors[i * 4] = base.r * k;
+      colors[i * 4 + 1] = base.g * k;
+      colors[i * 4 + 2] = base.b * k;
+      colors[i * 4 + 3] = 1; // opaque — required for the merge to read a full RGBA quad
     }
     mesh.setVerticesData(VertexBuffer.ColorKind, colors);
   }
@@ -289,11 +375,21 @@ export class PropBuilder {
   /** Create a raw part + assign it its own material (kept per-part via multiMultiMaterials). */
   private part(name: string, make: () => Mesh, color: Color3): [Mesh, Color3] {
     const m = make();
-    const mat = new StandardMaterial(`mat-${m.name}`, this.scene);
-    mat.diffuseColor = color;
-    if (name === "flame") mat.emissiveColor = new Color3(0.9, 0.45, 0.1); // visible even without the point light
+    const mat = createMatteMaterial(
+      this.scene,
+      `mat-${m.name}`,
+      color,
+      name === "flame" ? { emissive: new Color3(0.9, 0.45, 0.1) } : undefined, // visible even without the point light
+    );
     m.material = mat;
     return [m, color];
+  }
+
+  /** Create a part and bake per-vertex mottling on its local XZ — organic foliage/stone tone (survives merge). */
+  private mottledPart(name: string, make: () => Mesh, base: Color3): [Mesh, Color3] {
+    const [m, c] = this.part(name, make, base);
+    this.bakeMottling(m, { r: base.r, g: base.g, b: base.b });
+    return [m, c];
   }
 
   /** Merge positioned parts into one source mesh (one sub-mesh per material). */

@@ -17,7 +17,13 @@
  * This file MAY import Babylon (render layer). No simulation math here.
  */
 
-import { MeshBuilder, PBRMaterial, StandardMaterial, TransformNode, type Scene } from "@babylonjs/core";
+import { Color3, MeshBuilder, TransformNode, type PBRMaterial, type Scene } from "@babylonjs/core";
+import {
+  createMatteMaterial,
+  createMetalMaterial,
+  createPaintMaterial,
+  createRubberMaterial,
+} from "../rendering/materials.js";
 import type { VehicleDef } from "../data/vehicles.js";
 
 export type VehicleType = VehicleDef["type"];
@@ -55,27 +61,33 @@ const WHEEL_SPECS: Record<VehicleType, { front: { r: number; w: number }; rear: 
   atv: { front: { r: 0.42, w: 0.4 }, rear: { r: 0.42, w: 0.4 } },
 };
 
+/**
+ * Per-vehicle PBR materials (shared across that vehicle's meshes). All are
+ * assigned to meshes under the vehicle root, so KartRenderer's
+ * `root.dispose(true)` disposes them with it.
+ */
 interface SharedMats {
-  tire: StandardMaterial;
-  rim: StandardMaterial;
-  dark: StandardMaterial;
-  headlight: StandardMaterial;
-  taillight: StandardMaterial;
+  tire: PBRMaterial;
+  rim: PBRMaterial;
+  dark: PBRMaterial;
+  headlight: PBRMaterial;
+  taillight: PBRMaterial;
 }
 
 function makeSharedMats(scene: Scene, name: string): SharedMats {
-  const tire = new StandardMaterial(`${name}-tiremat`, scene);
-  tire.diffuseColor.set(0.1, 0.1, 0.12);
-  const rim = new StandardMaterial(`${name}-rimmat`, scene);
-  rim.diffuseColor.set(0.75, 0.76, 0.8);
-  const dark = new StandardMaterial(`${name}-darkmat`, scene);
-  dark.diffuseColor.set(0.15, 0.15, 0.2);
-  const headlight = new StandardMaterial(`${name}-headlightmat`, scene);
-  headlight.diffuseColor.set(0.9, 0.9, 0.85);
-  headlight.emissiveColor.set(0.85, 0.85, 0.7);
-  const taillight = new StandardMaterial(`${name}-taillightmat`, scene);
-  taillight.diffuseColor.set(0.5, 0.08, 0.05);
-  taillight.emissiveColor.set(0.9, 0.12, 0.08);
+  const tire = createRubberMaterial(scene, `${name}-tiremat`);
+  const rim = createMetalMaterial(scene, `${name}-rimmat`);
+  const dark = createMatteMaterial(scene, `${name}-darkmat`, new Color3(0.15, 0.15, 0.2));
+  // Lights stay emissive — PBR's emissiveColor is additive on top of the lit
+  // surface, so they still glow while picking up IBL on their unlit parts.
+  const headlight = createMatteMaterial(scene, `${name}-headlightmat`, new Color3(0.9, 0.9, 0.85), {
+    roughness: 0.4,
+    emissive: new Color3(0.85, 0.85, 0.7),
+  });
+  const taillight = createMatteMaterial(scene, `${name}-taillightmat`, new Color3(0.5, 0.08, 0.05), {
+    roughness: 0.4,
+    emissive: new Color3(0.9, 0.12, 0.08),
+  });
   return { tire, rim, dark, headlight, taillight };
 }
 
@@ -148,10 +160,9 @@ function buildExhaust(scene: Scene, name: string, chassis: TransformNode, mats: 
 function buildKart(scene: Scene, name: string, color: [number, number, number], mats: SharedMats): VehicleModel {
   const chassis = new TransformNode(`${name}-chassis`);
 
-  const bodyMat = new PBRMaterial(`${name}-bodymat`, scene);
-  bodyMat.albedoColor.set(color[0], color[1], color[2]);
-  bodyMat.metallic = 0.2;
-  bodyMat.roughness = 0.4;
+  // Glossy paint with clearcoat — KartRenderer still drives bodyMat.emissiveColor
+  // for hit-flash / star flicker (PBR emissive is additive, so that keeps working).
+  const bodyMat = createPaintMaterial(scene, `${name}-bodymat`, color);
 
   const body = MeshBuilder.CreateBox(`${name}-body`, { width: 1.4, height: 0.5, depth: 2.2 }, scene);
   body.parent = chassis;
@@ -209,10 +220,7 @@ function buildKart(scene: Scene, name: string, color: [number, number, number], 
 function buildBike(scene: Scene, name: string, color: [number, number, number], mats: SharedMats): VehicleModel {
   const chassis = new TransformNode(`${name}-chassis`);
 
-  const bodyMat = new PBRMaterial(`${name}-bodymat`, scene);
-  bodyMat.albedoColor.set(color[0], color[1], color[2]);
-  bodyMat.metallic = 0.2;
-  bodyMat.roughness = 0.4;
+  const bodyMat = createPaintMaterial(scene, `${name}-bodymat`, color);
 
   // Slim frame spine.
   const frame = MeshBuilder.CreateBox(`${name}-frame`, { width: 0.3, height: 0.22, depth: 1.7 }, scene);
@@ -269,10 +277,7 @@ function buildBike(scene: Scene, name: string, color: [number, number, number], 
 function buildAtv(scene: Scene, name: string, color: [number, number, number], mats: SharedMats): VehicleModel {
   const chassis = new TransformNode(`${name}-chassis`);
 
-  const bodyMat = new PBRMaterial(`${name}-bodymat`, scene);
-  bodyMat.albedoColor.set(color[0], color[1], color[2]);
-  bodyMat.metallic = 0.2;
-  bodyMat.roughness = 0.4;
+  const bodyMat = createPaintMaterial(scene, `${name}-bodymat`, color);
 
   // Wide boxy body.
   const body = MeshBuilder.CreateBox(`${name}-body`, { width: 1.7, height: 0.55, depth: 2.3 }, scene);

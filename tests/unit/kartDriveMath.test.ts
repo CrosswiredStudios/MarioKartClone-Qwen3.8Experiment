@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { TUNING } from "../../src/data/tuning.js";
-import { driveImpulse, forwardVec, targetSpeedOf, targetYawRate } from "../../src/entities/kartDriveMath.js";
+import { driveImpulse, forwardVec, targetSpeedOf, targetYawRate, uphillGradient } from "../../src/entities/kartDriveMath.js";
+import type { TerrainSampler } from "../../src/entities/KartPhysics.js";
 
 const DT = 1 / 60;
 const MASS = 150; // kg — arbitrary; the math is linear in mass.
@@ -97,5 +98,52 @@ describe("targetSpeedOf", () => {
   it("returns the brain's speed as the body's chase target", () => {
     const state = { speed: 17.5 } as never;
     expect(targetSpeedOf(state)).toBe(17.5);
+  });
+});
+
+describe("uphillGradient", () => {
+  const flat: TerrainSampler = { heightAt: () => 0 };
+  // A ramp rising +g per meter along +Z (heading 0): heightAt(x, z) = g * z.
+  const ramp = (g: number): TerrainSampler => ({ heightAt: (_x, z) => g * z });
+
+  it("is 0 on flat ground", () => {
+    expect(uphillGradient(flat, 0, 0, 0)).toBe(0);
+  });
+
+  it("is positive when climbing (heading up the ramp)", () => {
+    expect(uphillGradient(ramp(0.1), 0, 0, 0)).toBeCloseTo(0.1, 6);
+  });
+
+  it("is 0 when descending (heading down the ramp)", () => {
+    // Heading π points -Z, so the kart travels down the +Z ramp → downhill.
+    expect(uphillGradient(ramp(0.1), 0, 0, Math.PI)).toBe(0);
+  });
+
+  it("clamps to slopeClamp on a steep climb", () => {
+    const g = TUNING.terrain.slopeClamp * 3; // far steeper than the clamp
+    expect(uphillGradient(ramp(g), 0, 0, 0)).toBeCloseTo(TUNING.terrain.slopeClamp, 6);
+  });
+
+  it("is 0 when traveling across the slope (perpendicular)", () => {
+    // Heading π/2 travels +X; a ramp varying only in Z has no gradient along X.
+    expect(uphillGradient(ramp(0.1), 0, 0, Math.PI / 2)).toBeCloseTo(0, 6);
+  });
+});
+
+describe("driveImpulse uphill authority scaling", () => {
+  it("scales the per-step clamp up with a larger maxAccelMps2", () => {
+    const base = driveImpulse(0, 30, MASS, DT); // clamped at base authority
+    const boosted = driveImpulse(0, 30, MASS, DT, TUNING.physicsWorld.maxDriveAccelMps2 * 1.5);
+    expect(boosted).toBeCloseTo(base * 1.5, 6);
+  });
+
+  it("defaults to base authority when maxAccelMps2 is omitted", () => {
+    const maxDelta = TUNING.physicsWorld.maxDriveAccelMps2 * DT;
+    expect(driveImpulse(0, 30, MASS, DT)).toBeCloseTo(maxDelta * MASS, 6);
+  });
+
+  it("does not change a within-budget delta (no clamp hit)", () => {
+    const imp = driveImpulse(19.5, 20, MASS, DT);
+    expect(driveImpulse(19.5, 20, MASS, DT, TUNING.physicsWorld.maxDriveAccelMps2 * 2)).toBeCloseTo(imp, 6);
   });
 });

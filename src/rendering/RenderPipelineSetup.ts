@@ -57,8 +57,14 @@ import type { QualityManager } from "./QualityManager.js";
 
 /** Skybox sphere radius (m) — far beyond any camera travel; infiniteDistance keeps it fixed. */
 const SKYBOX_RADIUS = 2000;
-/** Fixed sun direction shared by both maps (matches the P4/P5 inline lights). */
-const SUN_DIRECTION = new Vector3(-0.4, -1, 0.3);
+/**
+ * PBR light-intensity recalibration: StandardMaterial and PBRMaterial interpret the same
+ * DirectionalLight intensity very differently (PBR is physically based, so a sun of 1.0
+ * looks ~3× dimmer on PBR surfaces). These scales convert the theme's artist-tuned values
+ * (tuned against the old Standard rig) into PBR-appropriate ones. Adjust here, not at call sites.
+ */
+const SUN_INTENSITY_SCALE = 3;
+const AMBIENT_INTENSITY_SCALE = 0.35;
 /** Accent point-light range (m) — a soft local glow, not scene-wide illumination. */
 const ACCENT_LIGHT_RANGE = 40;
 
@@ -179,6 +185,12 @@ export class RenderPipelineSetup {
     const tex = new CubeTexture(theme.skybox, scene);
     tex.coordinatesMode = Texture.SKYBOX_MODE;
 
+    // IBL: expose the sky cubemap as the scene environment texture. PBR materials fall back
+    // to scene.environmentTexture when they have no reflectionTexture of their own, so this
+    // single assignment lights every PBR surface in the scene (karts, road, ground, props).
+    // The skybox sphere itself is unaffected — it uses StandardMaterial + disableLighting.
+    scene.environmentTexture = tex;
+
     const mat = new StandardMaterial("sky-mat", scene);
     mat.reflectionTexture = tex; // skyboxes use reflectionTexture even though it's not a reflection
     // NO emissiveColor: with disableLighting, diffuseBase stays 0, so the final color is
@@ -199,13 +211,17 @@ export class RenderPipelineSetup {
     const scene = this.scene;
 
     // Hemisphere ambient tinted by the ground color for a grounded bounce feel.
+    // Intensity is scaled down for PBR (see AMBIENT_INTENSITY_SCALE) — with IBL now
+    // contributing ambient energy, a full-strength hemi would over-brighten shadows.
     this.hemi = new HemisphericLight("map-ambient", new Vector3(0, 1, 0), scene);
-    this.hemi.intensity = theme.ambientIntensity;
+    this.hemi.intensity = theme.ambientIntensity * AMBIENT_INTENSITY_SCALE;
     this.hemi.groundColor = hexToColor3(theme.groundColor).scale(0.6);
 
-    // Directional sun (fixed direction shared by both maps; intensity from theme).
-    this.sun = new DirectionalLight("map-sun", SUN_DIRECTION, scene);
-    this.sun.intensity = theme.sunIntensity;
+    // Directional sun — per-track direction from the theme (points FROM the sun TOWARD
+    // the scene, y < 0), normalized; intensity scaled up for PBR (see SUN_INTENSITY_SCALE).
+    const [sx, sy, sz] = theme.sunDirection;
+    this.sun = new DirectionalLight("map-sun", new Vector3(sx, sy, sz).normalize(), scene);
+    this.sun.intensity = theme.sunIntensity * SUN_INTENSITY_SCALE;
 
     // Accent point lights derived from the theme's accent color — a soft local glow.
     // The real TrackTheme has no per-light positions (the plan doc's accentLights[]
@@ -241,7 +257,9 @@ export class RenderPipelineSetup {
 
     const gen = new ShadowGenerator(size, this.sun);
     gen.usePercentageCloserFiltering = true;
-    gen.blurKernel = 8;
+    // Larger blur kernel than the Standard-material era: PBR surfaces show shadow-edge
+    // aliasing more strongly under specular highlights.
+    gen.blurKernel = 16;
     this.shadowGen = gen;
     // Casters are registered by the active scene via refreshShadowCasters() AFTER it
     // builds its track + karts (applyTheme runs before the track exists on first entry).
@@ -363,6 +381,11 @@ export class RenderPipelineSetup {
     this.accentLights = [];
     this.sun?.dispose();
     this.hemi?.dispose();
+    // Clear the IBL reference BEFORE disposing the cubemap so no PBR material is left
+    // pointing at a disposed texture (would throw on next render).
+    if (this.scene.environmentTexture === this.skyTex) {
+      this.scene.environmentTexture = null;
+    }
     this.skyTex?.dispose();
     this.skyMat?.dispose();
     this.skybox?.dispose();

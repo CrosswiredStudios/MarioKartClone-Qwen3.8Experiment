@@ -438,9 +438,15 @@ export class RaceController {
       // replace them). Headless (no drive) → legacy kinematic path, unchanged.
       k.drive?.sync(k);
 
+      // Air control: tires off the ground → the brain coasts (no steering/throttle).
+      // Detected from the synced position vs the surface — works for both paths, since
+      // the rigid-body path runs the brain WITHOUT terrain and needs this passed in.
+      const airborne =
+        k.state.pos.y > this.terrain.heightAt(k.state.pos.x, k.state.pos.z) + TUNING.terrain.airborneEpsilon;
+
       // Physics step (pure) with the kart's skill + rubber-band scales + terrain
       // (surface-glued Y and the mild slope speed model — kinematic path only).
-      let next = stepKart(k.state, input, surface, dt, k.topSpeedScale, k.accelScale, k.drive ? undefined : this.terrain);
+      let next = stepKart(k.state, input, surface, dt, k.topSpeedScale, k.accelScale, k.drive ? undefined : this.terrain, airborne);
 
       // Drift charge; on release grant the mini/super boost (same path as free-drive).
       const drift = updateDrift(next.driftCharge, input, dt);

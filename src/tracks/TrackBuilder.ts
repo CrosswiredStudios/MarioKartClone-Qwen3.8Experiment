@@ -12,14 +12,17 @@
 import {
   Color3,
   DynamicTexture,
+  Mesh,
   MeshBuilder,
   StandardMaterial,
   Texture,
   TransformNode,
   Vector3,
+  type PBRMaterial,
   type Scene,
 } from "@babylonjs/core";
 import { TUNING } from "../data/tuning.js";
+import { createAsphaltMaterial, createGrassMaterial } from "../rendering/materials.js";
 import type { TrackDefinition } from "../data/tracks/shared.js";
 import { makeHeightField, type HeightField } from "./TrackElevation.js";
 import type { TrackSpline } from "./TrackSpline.js";
@@ -135,7 +138,7 @@ export class TrackBuilder {
     // The heightmap mesh is centered on its position → shift to bounds center.
     ground.position.x = (b.minX + b.maxX) / 2;
     ground.position.z = (b.minZ + b.maxZ) / 2;
-    const mat = new StandardMaterial("ground-mat", this.scene);
+    const mat = createGrassMaterial(this.scene, "ground-mat");
     const grassTex = new Texture("textures/grass.jpg", this.scene);
     grassTex.wrapU = Texture.WRAP_ADDRESSMODE;
     grassTex.wrapV = Texture.WRAP_ADDRESSMODE;
@@ -144,9 +147,7 @@ export class TrackBuilder {
     // ~2 m per tile so individual grass blades read at chase-camera distance.
     grassTex.uScale = spanX / 2;
     grassTex.vScale = spanZ / 2;
-    mat.diffuseTexture = grassTex;
-    mat.diffuseColor = Color3.White(); // no tint — the texture carries the color
-    mat.specularColor = Color3.Black();
+    mat.albedoTexture = grassTex; // PBR: albedoTexture replaces diffuseTexture
     ground.material = mat;
     ground.parent = this.root;
   }
@@ -160,6 +161,10 @@ export class TrackBuilder {
     // widthOverride spans (bridges) narrow smoothly — no kink at the edges.
     const left: Vector3[] = [];
     const right: Vector3[] = [];
+    // Slab bottom edges: flared outward beyond the road and buried below local terrain,
+    // so the asphalt sheet gains real thickness and no ground vertex can poke through.
+    const botLeft: Vector3[] = [];
+    const botRight: Vector3[] = [];
     for (let i = 0; i <= ROAD_SAMPLES; i++) {
       const t = i / ROAD_SAMPLES; // ring N wraps to ring 0 → closed loop
       const halfWidth = this.spline.halfWidthAt(t);
@@ -175,15 +180,51 @@ export class TrackBuilder {
       // so it never z-fights the ground mesh.
       left.push(new Vector3(lx, this.field.heightAt(lx, lz) + TUNING.terrain.roadYOffset, lz));
       right.push(new Vector3(rx, this.field.heightAt(rx, rz) + TUNING.terrain.roadYOffset, rz));
+
+      // Slab bottom edge: same lateral direction as the top edge but pushed out by
+      // shoulderFlareM and sunk buryDepthM below the local (quantized) terrain so it
+      // always tucks under the ground mesh — no visible seam at the shoulder.
+      const flare = TUNING.terrain.shoulderFlareM;
+      const blx = p.x + nx * (halfWidth + flare);
+      const blz = p.z + nz * (halfWidth + flare);
+      const brx = p.x - nx * (halfWidth + flare);
+      const brz = p.z - nz * (halfWidth + flare);
+      botLeft.push(new Vector3(blx, this.field.heightAt(blx, blz) - TUNING.terrain.buryDepthM, blz));
+      botRight.push(new Vector3(brx, this.field.heightAt(brx, brz) - TUNING.terrain.buryDepthM, brz));
     }
 
     const road = MeshBuilder.CreateRibbon("track-road", { pathArray: [left, right] }, this.scene);
     road.material = this.buildRoadMaterial();
     road.parent = this.root;
 
+    // Slab body beneath the asphalt: left wall + bottom face + right wall. Gives the
+    // road thickness and hides any heightmap vertex that would otherwise poke through.
+    this.buildRoadSlab(left, botLeft, botRight, right);
+
     // Phase 6: beside each widthOverride span the off-road surface is a VOID — a dark
     // plane sits bridgeVoidDropM below road level so falling off reads as a cliff drop.
     this.buildBridgeVoids();
+  }
+
+  /**
+   * Slab body under the asphalt ribbon. One CreateRibbon with four paths
+   * [topLeft, botLeft, botRight, topRight] yields exactly three faces — left wall,
+   * bottom face, right wall (the top is intentionally omitted; that's the asphalt).
+   * Double-sided so walls/underside read correctly from any camera angle regardless of
+   * ribbon winding. Dark solid material — no texture, auto UVs are irrelevant.
+   */
+  private buildRoadSlab(topLeft: Vector3[], botLeft: Vector3[], botRight: Vector3[], topRight: Vector3[]): void {
+    const slab = MeshBuilder.CreateRibbon(
+      "track-road-slab",
+      { pathArray: [topLeft, botLeft, botRight, topRight], sideOrientation: Mesh.DOUBLESIDE },
+      this.scene,
+    );
+    const mat = new StandardMaterial("road-slab-mat", this.scene);
+    // Slightly darker than the asphalt so the shoulder reads as a cut edge.
+    mat.diffuseColor = new Color3(0.16, 0.15, 0.17);
+    mat.specularColor = Color3.Black();
+    slab.material = mat;
+    slab.parent = this.root;
   }
 
   /** Dark void ribbons flanking every widthOverride span, dropped below road level. */
@@ -229,8 +270,8 @@ export class TrackBuilder {
     }
   }
 
-  private buildRoadMaterial(): StandardMaterial {
-    const mat = new StandardMaterial("road-mat", this.scene);
+  private buildRoadMaterial(): PBRMaterial {
+    const mat = createAsphaltMaterial(this.scene, "road-mat");
     // Procedural asphalt + lane markings + rumble strips. The texture repeats
     // along the loop via UV u (see below).
     const tex = new DynamicTexture("road-tex", { width: 256, height: 128 }, this.scene, false);
@@ -247,8 +288,7 @@ export class TrackBuilder {
     // paths (road width). So repeat along u — one tile ≈ trackLength/100 of
     // track — and leave v unscaled so the texture spans the road width once.
     tex.uScale = ROAD_SAMPLES / 4;
-    mat.diffuseTexture = tex;
-    mat.specularColor = Color3.Black();
+    mat.albedoTexture = tex; // PBR: albedoTexture replaces diffuseTexture
     return mat;
   }
 

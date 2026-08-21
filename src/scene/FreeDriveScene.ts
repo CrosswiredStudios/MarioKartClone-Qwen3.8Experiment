@@ -113,7 +113,7 @@ export class FreeDriveScene implements IGameScreen, IDrivableScreen {
 
     // Physics rewrite — rigid body for the player kart (null physics world → kinematic).
     if (this.ctx.physicsWorld) {
-      this.playerBody = new KartBody(scene, this.player);
+      this.playerBody = new KartBody(scene, this.player, this.track.field);
       this.player.drive = this.playerBody;
     }
 
@@ -195,7 +195,10 @@ export class FreeDriveScene implements IGameScreen, IDrivableScreen {
     // Physics rewrite — body owns position/vertical when attached: sync() reads its real
     // state in first, and the brain runs WITHOUT terrain (Havok replaces glue/slope).
     player.drive?.sync(player);
-    const next = stepKart(player.state, input, surface, dt, 1, 1, player.drive ? undefined : field);
+    // Air control: no steering/throttle while the tires are off the ground.
+    const airborne =
+      player.state.pos.y > field.heightAt(player.state.pos.x, player.state.pos.z) + TUNING.terrain.airborneEpsilon;
+    const next = stepKart(player.state, input, surface, dt, 1, 1, player.drive ? undefined : field, airborne);
     player.state = next;
     player.drive?.apply(next, dt);
   }

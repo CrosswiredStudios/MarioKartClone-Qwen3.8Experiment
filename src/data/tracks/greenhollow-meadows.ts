@@ -3,6 +3,7 @@
  * Phase 4.1: re-authored ~3× longer (≈650 m/lap) with gentle rolling-hill elevation.
  * Data only (no mesh code); TrackBuilder + TrackElevation consume this.
  */
+import { createRng } from "../../core/Rng.js";
 import { validateTrackDefinition, type PropKind, type PropSpawn, type TrackDefinition } from "./shared.js";
 
 // helper keeps the catalog compact; pure data, deterministic
@@ -13,15 +14,54 @@ const p = (kind: PropKind, t: number, lateralOffset: number, scale?: number): Pr
   ...(scale !== undefined ? { scale } : {}),
 });
 
+/**
+ * Deterministic dense forest for Greenhollow Meadows (replaces the old 26 hand-placed trees).
+ * Two bands, both well outside the 6 m half-road-width (the clearance test needs ≥ 6.5 m):
+ *   near tree line — ~9–14 m lateral on BOTH sides at tight t-spacing → a dense forest edge
+ *   far background ring — ~18–32 m lateral, larger scale → depth behind the near line
+ * Seeded (mulberry32 via createRng) so the layout is identical every launch/build. Each entry
+ * carries its own scale + rotationY; PropBuilder picks a distinct tree variant per entry.
+ */
+function meadowTrees(): PropSpawn[] {
+  const rng = createRng(0x5eed); // fixed seed — deterministic catalog
+  const out: PropSpawn[] = [];
+
+  // Near tree line on both sides, tight spacing for a dense edge (skip ~1 in 7 → natural gaps).
+  const nearStep = 0.025;
+  for (let t = 0.012; t < 1; t += nearStep) {
+    for (const side of [1, -1]) {
+      if (rng.next() < 0.15) continue;
+      out.push({
+        kind: "tree",
+        t,
+        lateralOffset: side * rng.range(9, 14),
+        scale: rng.range(0.85, 1.35),
+        rotationY: rng.range(0, Math.PI * 2),
+      });
+    }
+  }
+
+  // Far background ring — sparser but bigger, for depth behind the near line.
+  const farStep = 0.04;
+  for (let t = 0.03; t < 1; t += farStep) {
+    for (const side of [1, -1]) {
+      if (rng.next() < 0.35) continue;
+      out.push({
+        kind: "tree",
+        t,
+        lateralOffset: side * rng.range(18, 32),
+        scale: rng.range(1.1, 1.7),
+        rotationY: rng.range(0, Math.PI * 2),
+      });
+    }
+  }
+
+  return out;
+}
+
 export const MEADOWS_PROPS: PropSpawn[] = [
-  // trees (26) — well outside the 6 m half-road-width
-  p("tree", 0.015, 9), p("tree", 0.045, -12), p("tree", 0.08, 10), p("tree", 0.115, -9),
-  p("tree", 0.15, 14), p("tree", 0.19, -11), p("tree", 0.23, 9), p("tree", 0.27, -13),
-  p("tree", 0.31, 10), p("tree", 0.35, -9), p("tree", 0.39, 12), p("tree", 0.43, -10),
-  p("tree", 0.47, 9), p("tree", 0.51, -12), p("tree", 0.55, 10), p("tree", 0.59, -9),
-  p("tree", 0.63, 13), p("tree", 0.67, -11), p("tree", 0.71, 9), p("tree", 0.75, -14),
-  p("tree", 0.79, 10), p("tree", 0.83, -9), p("tree", 0.87, 12), p("tree", 0.91, -10),
-  p("tree", 0.95, 9), p("tree", 0.98, -12),
+  // trees — dense seeded forest (near tree line + far background ring); see meadowTrees()
+  ...meadowTrees(),
   // mushrooms (26)
   p("mushroom", 0.03, 8, 1.2), p("mushroom", 0.07, -9), p("mushroom", 0.1, 8.5, 1.4),
   p("mushroom", 0.135, -8), p("mushroom", 0.17, 9, 1.1), p("mushroom", 0.21, -8.5),
@@ -42,7 +82,7 @@ export const MEADOWS_PROPS: PropSpawn[] = [
   p("flower", 0.5, 8), p("flower", 0.54, -8), p("flower", 0.58, 8), p("flower", 0.62, -8),
   p("flower", 0.66, 8), p("flower", 0.7, -8), p("flower", 0.74, 8), p("flower", 0.78, -8),
   p("flower", 0.82, 8), p("flower", 0.86, -8), p("flower", 0.9, 8), p("flower", 0.94, -8),
-]; // 84 entries total
+]; // dense generated tree forest + 58 mushrooms/signs/flowers
 
 export const MEADOWS_TRACK: TrackDefinition = {
   id: "meadows",
@@ -97,6 +137,9 @@ export const MEADOWS_TRACK: TrackDefinition = {
     fogDensity: 0.002, // very light
     sunIntensity: 1.0,
     ambientIntensity: 0.55,
+    // High warm sun — close to the old shared angle but slightly raked so
+    // shadows stretch a touch for depth.
+    sunDirection: [-0.45, -1, 0.35],
   },
   itemBoxClusters: [{ t: 0.15 }, { t: 0.45 }, { t: 0.75 }],
   hazards: [], // meadows has no hazards
