@@ -5,7 +5,7 @@ import { maxSpeedFor, stepKart } from "../../src/entities/KartPhysics.js";
 import { NO_DRIFT } from "../../src/entities/DriftController.js";
 
 const DT = 1 / 60;
-const PROFILE: PhysicsProfile = { topSpeedStat: 3, accelStat: 3 }; // stat 3 → 27.6 m/s
+const PROFILE: PhysicsProfile = { topSpeedStat: 3, accelStat: 3, steerEaseRate: 0 }; // stat 3 → 27.6 m/s; rate 0 = instant steer
 const MAX_SPEED = maxSpeedFor(PROFILE); // 30 * (0.8 + 0.04*3) = 27.6
 
 function makeState(overrides: Partial<KartState> = {}): KartState {
@@ -22,6 +22,7 @@ function makeState(overrides: Partial<KartState> = {}): KartState {
     driftCharge: { ...NO_DRIFT },
     speedRatio: 0,
     profile: PROFILE,
+    smoothedSteer: 0,
     ...overrides,
   };
 }
@@ -176,6 +177,63 @@ describe("KartPhysics.stepKart", () => {
     // Reversing skid spins the other way (sign(speed)=-1).
     const rev = stepKart(makeState({ speed: -MAX_SPEED, statusEffects: [{ kind: "skid", remaining: 2 }] }), input(), "road", DT);
     expect(rev.heading).toBeCloseTo(-TUNING.items.skidSpinRate * DT, 6);
+  });
+
+  describe("steer onset easing (4-wheelers)", () => {
+    const EASED: PhysicsProfile = { topSpeedStat: 3, accelStat: 3, steerEaseRate: TUNING.physics.steerEase4w };
+    const stepWith = (s: KartState, steer: number): KartState => stepKart(s, input({ throttle: 1, steer }), "road", DT);
+
+    it("4-wheeler ramps yaw in gradually and converges to the instant (rate-0) max rate", () => {
+      const instant = stepWith(makeState({ speed: MAX_SPEED }), 1);
+      const first = stepWith(makeState({ speed: MAX_SPEED, profile: EASED }), 1);
+      // First step turns LESS than the instant model — the turn builds up.
+      expect(first.heading).toBeGreaterThan(0);
+      expect(first.heading).toBeLessThan(instant.heading);
+
+      // Yaw rate climbs monotonically while the steer is held…
+      let s = makeState({ speed: MAX_SPEED, profile: EASED });
+      let prevRate = 0;
+      for (let i = 0; i < 30; i++) {
+        const n = stepWith(s, 1);
+        const rate = (n.heading - s.heading) / DT;
+        expect(rate).toBeGreaterThan(prevRate);
+        prevRate = rate;
+        s = n;
+      }
+      // …and converges to the same saturated max as the instant model.
+      for (let i = 0; i < 60; i++) s = stepWith(s, 1);
+      const finalRate = (stepWith(s, 1).heading - s.heading) / DT;
+      expect(Math.abs(finalRate - instant.heading / DT)).toBeLessThan(1e-6);
+    });
+
+    it("releasing the steer eases the yaw back to zero (no snap)", () => {
+      let s = makeState({ speed: MAX_SPEED, profile: EASED });
+      for (let i = 0; i < 120; i++) s = stepWith(s, 1); // fully into the turn
+      const n1 = stepWith(s, 0);
+      expect((n1.heading - s.heading) / DT).toBeGreaterThan(0); // still turning…
+      let s2 = n1;
+      for (let i = 0; i < 60; i++) s2 = stepWith(s2, 0);
+      const finalRate = (stepWith(s2, 0).heading - s2.heading) / DT;
+      expect(Math.abs(finalRate)).toBeLessThan(0.1); // …but nearly straight
+    });
+
+    it("bike profile (rate 0) matches the old closed-form exactly", () => {
+      const s = makeState({ speed: MAX_SPEED });
+      const next = stepKart(s, input({ throttle: 1, steer: 1 }), "road", DT);
+      expect(next.heading).toBeCloseTo(TUNING.physics.steerRateBase * DT, 10);
+      expect(next.smoothedSteer).toBe(1);
+    });
+
+    it("smoothedSteer is held while steering is frozen (skid) — no snap on release", () => {
+      const s = makeState({
+        speed: MAX_SPEED,
+        profile: EASED,
+        smoothedSteer: 0.8,
+        statusEffects: [{ kind: "skid", remaining: 2 }],
+      });
+      const next = stepKart(s, input({ throttle: 1, steer: -1 }), "road", DT);
+      expect(next.smoothedSteer).toBe(0.8); // frozen during the skid
+    });
   });
 
   it("hit effect caps effective maxSpeed at hitSlowFactor × base (immediate slow applied by controller)", () => {

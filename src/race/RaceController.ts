@@ -12,7 +12,7 @@
 
 import { TUNING } from "../data/tuning.js";
 import { CHARACTER_ROSTER } from "../data/characters.js";
-import { combinedStats } from "../data/vehicles.js";
+import { combinedStats, steerEaseRateFor, VEHICLE_ROSTER } from "../data/vehicles.js";
 import type { RaceConfig } from "../core/RaceConfig.js";
 import type { Rng } from "../core/Rng.js";
 import type { EventBus, GameEvents } from "../core/EventBus.js";
@@ -131,6 +131,8 @@ export class RaceController {
   /** Player input source (null in headless mode → player is AI-driven for determinism). */
   private readonly playerController: PlayerController | null;
   private readonly playerAi: WaypointAiStrategy | null;
+  /** Raw player input (null in headless mode) — read for the perfect-start press edge. */
+  private readonly playerInput: IInputSource | null;
 
   // ── Step 12 debug hook: runtime switch to waypoint-AI driving of the player kart. ──
   /** When set, the player kart's DriveInput comes from this strategy instead of keyboard. */
@@ -162,8 +164,19 @@ export class RaceController {
    * Plain strategy, NO RNG — determinism is preserved.
    */
   private spectatorAi: WaypointAiStrategy | null = null;
-  /** One-shot guard for the perfect-start boost award. */
-  private startBoostAwarded = false;
+  /**
+   * One-shot arm for the perfect-start boost: set when the player PRESSED accelerate
+   * (fresh keydown, not a hold) inside the last perfectStartWindowSec before GO.
+   * Granted at the GO transition; never set for AI-driven players.
+   */
+  private startBoostArmed = false;
+
+  /**
+   * Per-kart DriveInput from the most recent racing step (render-only: the scene feeds
+   * these to KartRenderer for cosmetic steer/pitch/exhaust). Empty during countdown —
+   * the scene falls back to neutral input then.
+   */
+  private lastInputs = new Map<string, DriveInput>();
 
   /** Pure heightfield — single source of truth for kart Y + the slope model. */
   readonly terrain: HeightField;
@@ -200,7 +213,11 @@ export class RaceController {
       color: me.color,
       pos: gridPos(this.terrain, opts.spline, GRID_SLOTS[0]),
       heading: gridHeading(opts.spline),
-      profile: { topSpeedStat: myStats.topSpeed, accelStat: myStats.accel },
+      profile: {
+        topSpeedStat: myStats.topSpeed,
+        accelStat: myStats.accel,
+        steerEaseRate: steerEaseRateFor(VEHICLE_ROSTER.find((v) => v.id === cfg.vehicleId)?.type ?? "kart"),
+      },
     });
     this.racers.push(this.player);
 
@@ -218,7 +235,11 @@ export class RaceController {
         color: ch.color,
         pos: gridPos(this.terrain, opts.spline, GRID_SLOTS[i + 1]),
         heading: gridHeading(opts.spline),
-        profile: { topSpeedStat: stats.topSpeed, accelStat: stats.accel },
+        profile: {
+          topSpeedStat: stats.topSpeed,
+          accelStat: stats.accel,
+          steerEaseRate: steerEaseRateFor(VEHICLE_ROSTER.find((v) => v.id === vehicleId)?.type ?? "kart"),
+        },
         topSpeedScale: skill,
       });
       this.racers.push(kart);
@@ -231,6 +252,7 @@ export class RaceController {
     // player kart is driven by the same waypoint strategy as the AI (headless determinism).
     this.playerController = opts.input ? new PlayerController(opts.input) : null;
     this.playerAi = this.playerController ? null : new WaypointAiStrategy(opts.spline);
+    this.playerInput = opts.input ?? null;
 
     // Initialize per-kart runtime: lastT from spawn, lapClock set at race start.
     for (const k of this.racers) {
@@ -305,6 +327,15 @@ export class RaceController {
     return this.racers;
   }
 
+  /**
+   * The kart's DriveInput from the last racing step (render layer: cosmetic wheel
+   * steer / body pitch / exhaust flame). Undefined before the first racing step
+   * (countdown) — callers fall back to neutral input.
+   */
+  latestInput(kartId: string): DriveInput | undefined {
+    return this.lastInputs.get(kartId);
+  }
+
   /** Item boxes for the render layer (spinning box visuals at cluster anchors). */
   itemBoxes(): ReadonlyArray<ItemBox> {
     return this.itemSpawner.boxes();
@@ -366,11 +397,34 @@ export class RaceController {
       this.nextTickRemaining--;
       this.tickBoundary += 1;
     }
+    // Phase 7 — perfect start: a FRESH accelerate press (edge, not a hold) inside the
+    // last perfectStartWindowSec before GO arms a one-shot boost. AI-driven players
+    // never earn it — it's a human skill. The edge flag is cleared by GameApp's
+    // endLogicStep() after each step, so a press counts exactly once.
+    if (
+      !this.startBoostArmed &&
+      this.playerInput &&
+      !this.aiDriveStrategy &&
+      this.countdownTimer >= TUNING.race.countdownSeconds - TUNING.race.perfectStartWindowSec &&
+      this.countdownTimer < TUNING.race.countdownSeconds
+    ) {
+      if (this.playerInput.justPressed("throttle")) this.startBoostArmed = true;
+    }
     if (this.countdownTimer >= TUNING.race.countdownSeconds) {
       this._phase = "racing";
       this.raceStartTime = this.simTime;
       for (const k of this.racers) this.runtime.get(k.id)!.lapClock = this.raceStartTime;
       this.bus.emit("race:start", {});
+      // Grant the armed perfect-start boost at GO so the very first racing step
+      // already runs at boost speed.
+      if (this.startBoostArmed) {
+        this.player.state.statusEffects.push({
+          kind: "boost",
+          speed: TUNING.race.startBoostSpeed,
+          remaining: TUNING.race.startBoostDurationSec,
+        });
+        this.bus.emit("kart:boosted", { kartId: "player", tier: "start" });
+      }
       if (this.renderEnabled) this.playRaceTheme();
     }
   }
@@ -394,26 +448,12 @@ export class RaceController {
       inputs.set("player", playerInput);
     }
 
-    // Phase 7 — perfect start: gas pressed within the window after GO grants a one-shot
-    // boost. Checked on the input already computed for THIS step (held-key reads are
-    // level-triggered, so holding W through GO works). Awarded before physics so the
-    // very first racing step already runs at boost speed.
-    if (!this.startBoostAwarded && this.simTime - this.raceStartTime < TUNING.race.perfectStartWindowSec) {
-      const pInput = inputs.get("player")!;
-      if (pInput.throttle > 0) {
-        this.startBoostAwarded = true;
-        this.player.state.statusEffects.push({
-          kind: "boost",
-          speed: TUNING.race.startBoostSpeed,
-          remaining: TUNING.race.startBoostDurationSec,
-        });
-        this.bus.emit("kart:boosted", { kartId: "player", tier: "start" });
-      }
-    }
     for (const k of this.racers) {
       if (k.isPlayer) continue;
       inputs.set(k.id, this.aiStrategies.get(k.id)!.decide(k, view, dt));
     }
+    // Render layer reads these for cosmetic wheel steer / pitch / exhaust (latestInput).
+    this.lastInputs = inputs;
 
     // (3) Rubber-band: recompute each AI's accelScale from its gap to the player.
     const playerProgress = this.progressM(this.player);

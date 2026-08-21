@@ -13,6 +13,10 @@ export interface IInputSource {
    * alone can't distinguish "holding" from "just pressed").
    */
   buttonHeld(name: "item"): boolean;
-  /** Edge-triggered, cleared each logic step by {@link endLogicStep}. */
-  justPressed(name: "item" | "pause"): boolean;
+  /**
+   * Edge-triggered, cleared each logic step by {@link endLogicStep}.
+   * "throttle" fires on a fresh accelerate keydown (W/ArrowUp) — used for the
+   * perfect-start press check (holding does NOT count).
+   */
+  justPressed(name: "item" | "pause" | "throttle"): boolean;
 }

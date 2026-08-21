@@ -16,7 +16,7 @@ import { Vector3 } from "@babylonjs/core";
 import type { RaceConfig } from "../core/RaceConfig.js";
 import type { GameContext, IGameScreen, IDrivableScreen, DriveSnapshot } from "../core/GameStateMachine.js";
 import { CHARACTER_ROSTER } from "../data/characters.js";
-import { VEHICLE_ROSTER, combinedStats } from "../data/vehicles.js";
+import { VEHICLE_ROSTER, combinedStats, steerEaseRateFor } from "../data/vehicles.js";
 import type { VehicleType } from "../entities/vehicleModels.js";
 import { LAGOON_TRACK, MEADOWS_TRACK } from "../data/tracks/index.js";
 import { TUNING } from "../data/tuning.js";
@@ -98,7 +98,11 @@ export class FreeDriveScene implements IGameScreen, IDrivableScreen {
 
     // Karts: player in slot 1, the other three roster characters parked behind.
     const stats = combinedStats(this.raceConfig.characterId, this.raceConfig.vehicleId);
-    const profile = { topSpeedStat: stats.topSpeed, accelStat: stats.accel };
+    const profile = {
+      topSpeedStat: stats.topSpeed,
+      accelStat: stats.accel,
+      steerEaseRate: steerEaseRateFor(VEHICLE_ROSTER.find((v) => v.id === this.raceConfig.vehicleId)?.type ?? "kart"),
+    };
     const me = CHARACTER_ROSTER.find((c) => c.id === this.raceConfig.characterId) ?? CHARACTER_ROSTER[0];
 
     this.player = createKart({

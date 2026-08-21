@@ -3,6 +3,7 @@
  * Modifier values are fixed by 00-overview.md §3; do not deviate.
  */
 
+import { TUNING } from "./tuning.js";
 import { CHARACTER_ROSTER } from "./characters.js";
 
 export interface VehicleDef {
@@ -45,6 +46,15 @@ export const VEHICLE_ROSTER: readonly VehicleDef[] = [
     modifiers: { accel: -1, topSpeed: 1, handling: -1, offRoad: 1 },
   },
 ];
+
+/**
+ * Steer onset easing rate for a vehicle type (per second; 0 = instant). Bikes steer
+ * instantly; the 4-wheelers (kart/ATV) ease their effective steer toward the input so
+ * turns build up gradually. See TUNING.physics.steerEase4w.
+ */
+export function steerEaseRateFor(type: VehicleDef["type"]): number {
+  return type === "bike" ? 0 : TUNING.physics.steerEase4w;
+}
 
 /** character stats + vehicle modifiers, each axis clamped to [1, 5]. Throws if an id is unknown. */
 export function combinedStats(characterId: string, vehicleId: string): CombinedStats {

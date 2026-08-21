@@ -10,6 +10,11 @@ export const TUNING = {
     brakeForce: 25,
     reverseMax: -8,
     steerRateBase: 2.4,
+    // Steer onset easing for 4-wheel vehicles (kart/ATV): per-second exponential approach
+    // rate the brain's smoothedSteer uses to chase the raw steer input. ~63% in 0.1 s,
+    // ~95% in 0.3 s — turns build up gradually instead of snapping to full authority.
+    // Bikes use 0 (instant). Peak yaw rate is unchanged; only the ramp is gentler.
+    steerEase4w: 10,
     offRoadDrag: 0.92,
     onRoadMargin: 0.5, // meters of grace beyond roadWidth/2 before "offRoad" (Phase 3)
     dragCoef: 0.6, // terminal-speed drag coefficient per second (Phase 3)
@@ -119,7 +124,8 @@ export const TUNING = {
     checkpointsPerLap: 8,
     standingsIntervalSec: 1,
     aiFinishTimeoutSec: 10,
-    // Perfect start (Phase 7): gas pressed within this window after GO grants a boost.
+    // Perfect start (Phase 7): accelerate must be PRESSED (fresh keydown, not held)
+    // within this window before GO grants a one-shot boost.
     perfectStartWindowSec: 0.3,
     startBoostSpeed: 40, // m/s forced while the start boost is active
     startBoostDurationSec: 1.2,

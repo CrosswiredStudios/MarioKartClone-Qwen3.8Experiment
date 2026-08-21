@@ -79,7 +79,7 @@ export interface CreateKartOpts {
   topSpeedScale?: number; // Phase 4 — default 1.0 (player / free-drive karts)
 }
 
-const DEFAULT_PROFILE: PhysicsProfile = { topSpeedStat: 3, accelStat: 3 };
+const DEFAULT_PROFILE: PhysicsProfile = { topSpeedStat: 3, accelStat: 3, steerEaseRate: 0 };
 
 export function createKart(opts: CreateKartOpts): KartEntity {
   const lapState = initialLapState();
@@ -104,6 +104,7 @@ export function createKart(opts: CreateKartOpts): KartEntity {
       driftCharge: { ...NO_DRIFT },
       speedRatio: 0,
       profile: opts.profile ?? DEFAULT_PROFILE,
+      smoothedSteer: 0, // no turn in progress at spawn
     },
   };
 }

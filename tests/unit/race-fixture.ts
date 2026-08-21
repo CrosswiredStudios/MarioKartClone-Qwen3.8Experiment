@@ -47,7 +47,7 @@ export function makeRaceFixture(seed = 7, ownerIndex = 3): RaceFixture {
       color: [1, 0.5, 0.2],
       pos: { x: p.x, y: 0, z: p.z },
       heading: Math.atan2(tan.x, tan.z), // heading 0 = +Z forward
-      profile: { topSpeedStat: 3, accelStat: 3 },
+      profile: { topSpeedStat: 3, accelStat: 3, steerEaseRate: 0 },
     });
   });
 

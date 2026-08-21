@@ -32,7 +32,7 @@ function kartAt(id: string, t: number, lateral = 0, speed = 0): KartEntity {
     color: [1, 0.5, 0.2],
     pos: { x: p.x + nx * lateral, y: 0, z: p.z + nz * lateral },
     heading: Math.atan2(tan.x, tan.z),
-    profile: { topSpeedStat: 3, accelStat: 3 },
+    profile: { topSpeedStat: 3, accelStat: 3, steerEaseRate: 0 },
   });
   k.state.speed = speed;
   return k;

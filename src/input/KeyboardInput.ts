@@ -15,6 +15,7 @@ export class KeyboardInput implements IInputSource {
   private readonly held = new Set<string>(); // e.code values currently down
   private justItem = false;
   private justPause = false;
+  private justThrottle = false;
 
   constructor(private readonly target: EventTargetLike = globalThis.window) {}
 
@@ -25,6 +26,7 @@ export class KeyboardInput implements IInputSource {
         this.held.add(e.code);
         if (e.code === "KeyE" || e.code === "Enter") this.justItem = true;
         if (e.code === "Escape") this.justPause = true;
+        if (e.code === "KeyW" || e.code === "ArrowUp") this.justThrottle = true;
       }
     });
     this.target.addEventListener("keyup", (e: KeyboardEvent) => {
@@ -58,14 +60,17 @@ export class KeyboardInput implements IInputSource {
     return this.held.has("KeyE") || this.held.has("Enter");
   }
 
-  justPressed(name: "item" | "pause"): boolean {
+  justPressed(name: "item" | "pause" | "throttle"): boolean {
     // Cleared by endLogicStep(), NOT here — a step may query twice.
-    return name === "item" ? this.justItem : this.justPause;
+    if (name === "item") return this.justItem;
+    if (name === "pause") return this.justPause;
+    return this.justThrottle;
   }
 
   /** Clears all justPressed flags — called once per fixed step by GameApp. */
   endLogicStep(): void {
     this.justItem = false;
     this.justPause = false;
+    this.justThrottle = false;
   }
 }

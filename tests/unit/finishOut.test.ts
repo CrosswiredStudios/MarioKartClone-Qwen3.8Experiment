@@ -6,7 +6,8 @@
  *     `race:playerFinished` fires, the sim keeps stepping (AI-driven player), and
  *     `race:finished` only lands once every kart has finished or the grace deadline passes.
  *   - `skipFinishOut()` finalizes immediately with DNFs for unfinished karts.
- *   - gas pressed within 0.3 s of GO awards a one-shot "start" boost (kart:boosted).
+ *   - a FRESH accelerate press (edge, not a hold) within the last 0.3 s before GO
+ *     awards a one-shot "start" boost (kart:boosted); holding gas does not.
  */
 
 import { describe, expect, it } from "vitest";
@@ -23,13 +24,20 @@ const DT = 1 / 60;
 /** A full headless race is ~55–70 s of sim time — well over Vitest's default 5 s. */
 const HEAVY_TIMEOUT = 90_000;
 
-function makeMockInput(throttle = 0): IInputSource {
-  return {
+/**
+ * Mutable mock input. `justThrottle` is the accelerate PRESS edge — tests set it
+ * true for exactly one update() call (headless tests never run endLogicStep, so the
+ * test owns clearing it, mirroring how GameApp clears the real edge each step).
+ */
+function makeMockInput(throttle = 0): { input: IInputSource; justThrottle: { value: boolean } } {
+  const justThrottle = { value: false };
+  const input: IInputSource = {
     axis: (name) => (name === "throttle" ? throttle : 0),
     button: () => false,
     buttonHeld: () => false,
-    justPressed: () => false,
+    justPressed: (name) => (name === "throttle" ? justThrottle.value : false),
   };
+  return { input, justThrottle };
 }
 
 interface FinishOutRace {
@@ -147,28 +155,46 @@ describe("Phase 7 finish-out", () => {
     expect(race.ctrl.phase).toBe("racing"); // unchanged — player hasn't finished yet
   });
 
-  it("perfect start: gas within the window of GO awards a one-shot 'start' boost", () => {
-    const input = makeMockInput(1); // throttle held from t=0 (through countdown + GO)
+  it("perfect start: fresh accelerate press in the last 0.3 s before GO awards a one-shot 'start' boost", () => {
+    const { input, justThrottle } = makeMockInput(1); // throttle held from t=0
     const race = buildRace(7, input);
 
-    // Step through the 3 s countdown + 2 s after GO. The mock player drives straight
-    // (no steering) so we only care about the boost award, not finishing.
-    for (let i = 0; i < Math.round((TUNING.race.countdownSeconds + 2) / DT); i++) {
+    const totalSteps = Math.round((TUNING.race.countdownSeconds + 2) / DT);
+    // Press on the step at t≈2.8 s — inside the [2.7, 3.0) window before GO.
+    const pressStep = Math.round(2.8 / DT);
+    for (let i = 0; i < totalSteps; i++) {
+      if (i === pressStep) justThrottle.value = true;
       race.ctrl.update(DT);
+      justThrottle.value = false; // consume the edge, as GameApp's endLogicStep would
     }
 
-    // Exactly one start boost, on the player kart — and it was granted in the first
-    // racing step (throttle was already held when GO fired).
+    // Exactly one start boost, on the player kart — granted at the GO transition.
     expect(race.startBoosts).toHaveLength(1);
     expect(race.startBoosts[0].kartId).toBe("player");
   });
 
-  it("no perfect-start boost when gas is not pressed in the window", () => {
-    const input = makeMockInput(0); // never press gas
+  it("no perfect-start boost when gas is held but never freshly pressed in the window", () => {
+    const { input } = makeMockInput(1); // throttle held from t=0, but justThrottle stays false
     const race = buildRace(7, input);
 
     for (let i = 0; i < Math.round((TUNING.race.countdownSeconds + 2) / DT); i++) {
       race.ctrl.update(DT);
+    }
+
+    expect(race.startBoosts).toHaveLength(0);
+  });
+
+  it("no perfect-start boost when the press lands before the window", () => {
+    const { input, justThrottle } = makeMockInput(1);
+    const race = buildRace(7, input);
+
+    const totalSteps = Math.round((TUNING.race.countdownSeconds + 2) / DT);
+    // Press at t≈2.5 s — 0.2 s BEFORE the [2.7, 3.0) window opens.
+    const pressStep = Math.round(2.5 / DT);
+    for (let i = 0; i < totalSteps; i++) {
+      if (i === pressStep) justThrottle.value = true;
+      race.ctrl.update(DT);
+      justThrottle.value = false;
     }
 
     expect(race.startBoosts).toHaveLength(0);

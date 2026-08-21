@@ -105,17 +105,19 @@ test.describe("Pause menu lifecycle", () => {
     expect(resumedState).toBe("Racing");
     await expect(page.getByTestId("screen-paused")).toHaveCount(0);
 
-    // The kart keeps driving after resume (AI drive) — position moves again.
+    // The kart keeps driving after resume (AI drive) — position moves away from where it
+    // was frozen. The baseline is passed as an argument: the predicate runs in the browser
+    // context, so Node-side variables aren't visible to it.
     await page.waitForFunction(
-      () => {
+      (base: { x: number; y: number; z: number }) => {
         const player = window.__game.karts().find((k) => k.id === "player");
         if (!player) return false;
         return (
-          Math.abs(player.pos.x - posBefore!.x) > 0.5 ||
-          Math.abs(player.pos.z - posBefore!.z) > 0.5
+          Math.abs(player.pos.x - base.x) > 0.5 ||
+          Math.abs(player.pos.z - base.z) > 0.5
         );
       },
-      null,
+      posFrozenA!,
       { timeout: 60_000, polling: 250 }, // rAF throttling can slow the kart's wall-clock progress
     );
 

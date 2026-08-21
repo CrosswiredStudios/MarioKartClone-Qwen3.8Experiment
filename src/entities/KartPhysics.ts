@@ -46,6 +46,13 @@ export type StatusEffect =
 export interface PhysicsProfile {
   readonly topSpeedStat: number; // 1..5
   readonly accelStat: number; // 1..5
+  /**
+   * Steer onset easing rate (per second) for the smoothedSteer value. 0 = instant
+   * (no ramp — bikes); >0 = the brain eases its effective steer toward the input at
+   * this exponential rate (4-wheelers: TUNING.physics.steerEase4w). Peak yaw rate is
+   * unchanged; only the build-up/relaxation of a turn is gradual.
+   */
+  readonly steerEaseRate: number;
 }
 
 export type SurfaceKind = "road" | "offRoad" | "oilSlick";
@@ -93,6 +100,13 @@ export interface KartState {
   driftCharge: DriftCharge; // full wrapper {tier, chargeTime} — see DriftController header
   speedRatio: number; // 0..1 normalized top speed (audio/camera)
   profile: PhysicsProfile; // AS-BUILT: per-kart stats carried in state (see header)
+  /**
+   * Eased steer value (-1..1) the brain actually applies to heading. Ramps toward the
+   * raw input at profile.steerEaseRate each step (instant when rate is 0). Held while
+   * steering is frozen (skid / bulletBill / airborne), so releasing an effect doesn't
+   * snap the kart into a turn.
+   */
+  smoothedSteer: number;
 }
 
 function clamp(v: number, lo: number, hi: number): number {
@@ -255,6 +269,11 @@ export function stepKart(
 
   // ── steering ─────────────────────────────────────────────────────────────────────
   let heading = state.heading;
+  // Eased steer value (-1..1): ramps toward the (shrink-adjusted) input at
+  // profile.steerEaseRate. Held while steering is frozen (skid / bulletBill /
+  // airborne skip the branch below), so releasing an effect doesn't snap the kart
+  // into a turn.
+  let smoothedSteer = state.smoothedSteer;
   if (skidActive) {
     // Skid: a fixed spin replaces steering; throttle/steer inputs are ignored.
     heading += it.skidSpinRate * dt * Math.sign(speed || 1);
@@ -262,10 +281,16 @@ export function stepKart(
     // (Airborne falls through with no change — no air control, the kart flies straight.)
     let steer = input.steer;
     if (shrinkActive) steer *= it.shrinkSteerFactor; // lightning: reduced steering authority
+    // Steer onset easing (4-wheelers): ramp the effective steer toward its target so
+    // turns build up gradually. rate 0 → instant (bikes, and every pre-existing test).
+    smoothedSteer =
+      state.profile.steerEaseRate > 0
+        ? state.smoothedSteer + (steer - state.smoothedSteer) * Math.min(1, dt * state.profile.steerEaseRate)
+        : steer;
     const speedFactor = clamp(Math.abs(speed) / (maxSpeed * 0.4), 0, 1);
     const reverseSign = speed < 0 ? -1 : 1;
     const steerAngle =
-      steer * p.steerRateBase * speedFactor * reverseSign * (input.drifting ? 1.35 : 1);
+      smoothedSteer * p.steerRateBase * speedFactor * reverseSign * (input.drifting ? 1.35 : 1);
     heading += steerAngle * dt;
     // bulletBill: heading frozen (no steering) — falls through with no change.
   }
@@ -304,5 +329,6 @@ export function stepKart(
     speed,
     statusEffects,
     speedRatio: clamp(Math.abs(speed) / maxSpeed, 0, 1),
+    smoothedSteer,
   };
 }

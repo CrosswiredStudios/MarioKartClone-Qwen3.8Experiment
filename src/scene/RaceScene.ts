@@ -469,7 +469,9 @@ export class RaceScene implements IGameScreen {
     const terrain = this.track?.field;
     for (const k of this.race.karts()) {
       const r = this.renderers.get(k.id);
-      if (r) r.update(k.state, NO_INPUT, dt, terrain ?? undefined);
+      // Live per-kart input (steer → front-wheel yaw, throttle → pitch/exhaust).
+      // Undefined during the countdown (no racing steps yet) → neutral input.
+      if (r) r.update(k.state, this.race.latestInput(k.id) ?? NO_INPUT, dt, terrain ?? undefined);
     }
 
     // Phase 5.1 — mirror live shells + the player's charge indicator.
